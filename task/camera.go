@@ -155,11 +155,13 @@ func startFFmpeg(ctx context.Context, cam constant.Camera, camDir string) *exec.
 			"-timeout", "5000000",
 			"-max_delay", "500000",
 			"-reorder_queue_size", "1024",
+			"-use_wallclock_as_timestamps", "1", // 强制使用本地系统时钟作为视频帧的时间戳基准
 			"-i", safeRTSPUrl,
 			"-c:v", "copy", // 视频流保持直接拷贝，不消耗 CPU
 			"-c:a", "aac", // 把摄像头的 pcm_alaw 实时转成 MP4 兼容的 AAC 音频
 			"-f", "segment",
 			"-segment_time", fmt.Sprintf("%d", cam.SegmentDuration),
+			"-segment_atclocktime", "1", // 开启按自然时钟对齐切割（如 00:00, 00:05）
 			"-segment_format", cam.Format,
 			"-reset_timestamps", "1",
 			"-strftime", "1",
