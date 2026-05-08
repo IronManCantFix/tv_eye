@@ -39,7 +39,7 @@ func DailyMergeTask(ctx context.Context, wg *sync.WaitGroup, cfg constant.Config
 			timer.Stop()
 			return
 		case <-timer.C:
-			mergeDate := nextRun.AddDate(0, 0, -1).Format("2006-01-02")
+			mergeDate := nextRun.AddDate(0, 0, -2).Format("2006-01-02")
 			log.Printf("开始执行每日录像合并任务，目标日期: %s", mergeDate)
 			for _, cam := range cfg.Cameras {
 				if err := mergeCameraDate(ctx, cam, mergeDate); err != nil {
@@ -156,7 +156,11 @@ func writeConcatList(fragments []string) (string, error) {
 
 	writer := bufio.NewWriter(file)
 	for _, fragment := range fragments {
-		if _, err := fmt.Fprintf(writer, "file '%s'\n", escapeConcatPath(fragment)); err != nil {
+		absFragment, err := filepath.Abs(fragment)
+		if err != nil {
+			return "", err
+		}
+		if _, err := fmt.Fprintf(writer, "file '%s'\n", escapeConcatPath(absFragment)); err != nil {
 			return "", err
 		}
 	}
