@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -23,6 +24,13 @@ type recordFile struct {
 	Url  string `json:"url"`
 	Size string `json:"size"` // 文件大小字符串
 	Path string `json:"path"` // 相对路径，用于删除文件
+}
+
+type probeResult struct {
+	Codec     string `json:"codec"`
+	IsH265    bool   `json:"is_h265"`
+	CanProbe  bool   `json:"can_probe"`
+	ProbeNote string `json:"probe_note,omitempty"`
 }
 
 func handleIndex(c *gin.Context) {
@@ -104,15 +112,11 @@ func handleRecords(c *gin.Context) {
 }
 
 func handleDeleteRecord(c *gin.Context) {
-	targetPath := c.Query("path")
-
-	// 基础安全校验，防止路径穿越攻击 (防范 ../../../etc/passwd 这类请求)
-	if targetPath == "" || strings.Contains(targetPath, "..") {
+	fullPath, ok := safeRecordPath(c)
+	if !ok {
 		c.JSON(400, gin.H{"error": "非法的路径参数"})
 		return
 	}
-
-	fullPath := filepath.Join(constant.DefaultRecordBaseDir, targetPath)
 
 	if err := os.Remove(fullPath); err != nil {
 		c.JSON(500, gin.H{"error": "删除失败，文件可能已被清理"})
@@ -120,6 +124,29 @@ func handleDeleteRecord(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"msg": "录像删除成功"})
+}
+
+func handleProbeRecord(c *gin.Context) {
+	fullPath, ok := safeRecordPath(c)
+	if !ok {
+		c.JSON(400, gin.H{"error": "非法的路径参数"})
+		return
+	}
+
+	codec, err := probeVideoCodec(fullPath)
+	if err != nil {
+		c.JSON(http.StatusOK, probeResult{
+			CanProbe:  false,
+			ProbeNote: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, probeResult{
+		Codec:    codec,
+		IsH265:   isH265Codec(codec),
+		CanProbe: true,
+	})
 }
 
 func handleUnmanagedStreams(c *gin.Context) {
@@ -181,6 +208,97 @@ func handlePlayHLS(c *gin.Context) {
 	c.String(200, m3u8Content)
 }
 
+// handlePlayRemux 实时重封装：零损耗、零转码、极低CPU，用于浏览器直接硬解 H.265
+func handlePlayRemux(c *gin.Context) {
+	fullPath, ok := safeRecordPathFromParam(c.Param("filepath"))
+	if !ok {
+		c.String(http.StatusBadRequest, "非法的路径参数")
+		return
+	}
+
+	// 核心魔法参数：-c:v copy 彻底跳过视频转码
+	args := []string{
+		"-hide_banner",
+		"-loglevel", "error",
+		"-i", fullPath,
+		"-c:v", "copy", // 核心：直接复制 H.265 原始数据
+		"-c:a", "aac", // 音频由于监控多为 G711，浏览器不支持，需要转码 AAC（极低开销）
+		"-f", "mp4", // 封装为 MP4
+		// 关键标志：让 MP4 变成流式结构 (Fragmented MP4)，不需要等文件全部处理完就能播放
+		"-movflags", "frag_keyframe+empty_moov",
+		"pipe:1", // 输出到标准流
+	}
+
+	cmd := exec.CommandContext(c.Request.Context(), "ffmpeg", args...)
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		c.String(http.StatusInternalServerError, "重封装初始化失败")
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		c.String(http.StatusInternalServerError, "重封装启动失败")
+		return
+	}
+
+	// 告诉浏览器这直接就是一个 MP4 视频流
+	c.Header("Content-Type", "video/mp4")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+
+	// 将 fMP4 数据流直接打给前端
+	c.DataFromReader(http.StatusOK, -1, "video/mp4", stdout, nil)
+
+	if err := cmd.Wait(); err != nil && c.Request.Context().Err() == nil {
+		log.Printf("实时重封装进程退出异常: %v", err)
+	}
+}
+
+func handlePlayTranscode(c *gin.Context) {
+	fullPath, ok := safeRecordPathFromParam(c.Param("filepath"))
+	if !ok {
+		c.String(http.StatusBadRequest, "非法的路径参数")
+		return
+	}
+
+	args := []string{
+		"-hide_banner",
+		"-loglevel", "error",
+		"-i", fullPath,
+		"-map", "0:v:0",
+		"-map", "0:a?",
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-tune", "zerolatency",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		"-f", "mpegts",
+		"pipe:1",
+	}
+
+	cmd := exec.CommandContext(c.Request.Context(), "ffmpeg", args...)
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		c.String(http.StatusInternalServerError, "转码初始化失败")
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		c.String(http.StatusInternalServerError, "转码启动失败")
+		return
+	}
+
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	c.DataFromReader(http.StatusOK, -1, "video/mp2t", stdout, nil)
+
+	if err := cmd.Wait(); err != nil && c.Request.Context().Err() == nil {
+		log.Printf("按需转码进程退出异常: %v", err)
+	}
+}
+
 func handleWebRTCProxy(c *gin.Context) {
 	camID := c.Param("id")
 
@@ -230,4 +348,52 @@ func handleWebRTCProxy(c *gin.Context) {
 
 	// 将 go2rtc 返回的 SDP Answer 原封不动返回给前端
 	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+}
+
+func safeRecordPath(c *gin.Context) (string, bool) {
+	return safeRecordPathFromParam(c.Query("path"))
+}
+
+func safeRecordPathFromParam(targetPath string) (string, bool) {
+	targetPath = strings.TrimPrefix(targetPath, "/")
+	if targetPath == "" || strings.Contains(targetPath, "..") {
+		return "", false
+	}
+	if !strings.HasSuffix(targetPath, ".ts") && !strings.HasSuffix(targetPath, ".mp4") {
+		return "", false
+	}
+	return filepath.Join(constant.DefaultRecordBaseDir, targetPath), true
+}
+
+func probeVideoCodec(fullPath string) (string, error) {
+	cmd := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "json",
+		fullPath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Streams []struct {
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return "", err
+	}
+	if len(result.Streams) == 0 {
+		return "", fmt.Errorf("未找到视频流")
+	}
+	return result.Streams[0].CodecName, nil
+}
+
+func isH265Codec(codec string) bool {
+	codec = strings.ToLower(codec)
+	return codec == "hevc" || codec == "h265" || codec == "h.265"
 }

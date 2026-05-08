@@ -26,11 +26,14 @@ func startWebServer() {
 	r.POST("/api/config", handleSaveConfig)
 	r.POST("/api/camera/:id/:action", handleCameraAction)
 	r.GET("/api/records/:id", handleRecords)
+	r.GET("/api/record/probe", handleProbeRecord)
 	r.DELETE("/api/record", handleDeleteRecord)
 	r.GET("/api/go2rtc/unmanaged", handleUnmanagedStreams)
 
 	r.StaticFS("/play", http.Dir(constant.DefaultRecordBaseDir))
 	r.GET("/play_hls/*filepath", handlePlayHLS)
+	r.GET("/play_transcode/*filepath", handlePlayTranscode)
+	r.GET("/play_remux/*filepath", handlePlayRemux)
 
 	// 让 CamKeep 作为统一网关，直接代理 go2rtc 的全能自适应直播功能
 	go2rtcURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", constant.DefaultGo2rtcHost, constant.DefaultGo2rtcApiPort))

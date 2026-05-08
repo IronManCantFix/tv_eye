@@ -345,7 +345,11 @@ function renderGrid() {
         grid.insertAdjacentHTML('beforeend', cellHtml);
 
         if (cellData[i]) {
-            executePlayInCell(i, cellData[i].source, cellData[i].isLive, cellData[i].title);
+            if (cellData[i].codecNotice) {
+                showCodecNoticeInCell(i, cellData[i]);
+            } else {
+                executePlayInCell(i, cellData[i].source, cellData[i].isLive, cellData[i].title);
+            }
         }
     }
     updateFocusUI();
@@ -369,7 +373,11 @@ function clearCell(index) {
     if (liveIframe) liveIframe.classList.add('hidden');
     if (dplayerContainer) dplayerContainer.classList.add('hidden');
     if (nativePlayer) nativePlayer.classList.add('hidden');
-    if (emptyState) emptyState.classList.remove('hidden');
+    if (emptyState) {
+        resetEmptyState(index);
+        emptyState.classList.remove('hidden');
+        emptyState.classList.add('pointer-events-none');
+    }
     if (label) {
         label.classList.add('hidden');
         label.innerText = '';
@@ -446,7 +454,165 @@ function playVideo(source, isLive, title) {
     }
 }
 
-function executePlayInCell(index, source, isLive, title) {
+async function playRecord(file, title) {
+    const targetCell = activeCell;
+    showProbeLoadingInCell(targetCell, title);
+
+    try {
+        const resp = await fetch(`/api/record/probe?path=${encodeURIComponent(file.path)}`);
+        const probe = await resp.json();
+        const needsHelp = probe.can_probe && probe.is_h265 && !browserSupportsHEVC();
+        if (needsHelp) {
+            const noticeData = {
+                codecNotice: true,
+                source: file.url,
+                isLive: false,
+                title,
+                file,
+                codec: probe.codec || 'hevc',
+                canTranscode: !isMobilePlayback()
+            };
+            cellData[targetCell] = noticeData;
+            showCodecNoticeInCell(targetCell, noticeData);
+            updateFocusUI();
+            return;
+        }
+    } catch (e) {
+        console.warn('编码探测失败，尝试直接播放:', e);
+    }
+
+    cellData[targetCell] = {source: file.url, isLive: false, title};
+    executePlayInCell(targetCell, file.url, false, title);
+    updateFocusUI();
+}
+
+function browserSupportsHEVC() {
+    const video = document.createElement('video');
+    const candidates = [
+        'video/mp4; codecs="hvc1.1.6.L93.B0"',
+        'video/mp4; codecs="hev1.1.6.L93.B0"'
+    ];
+    return candidates.some(type => video.canPlayType(type) !== '');
+}
+
+function isMobilePlayback() {
+    return window.matchMedia('(max-width: 767px), (pointer: coarse)').matches;
+}
+
+function showProbeLoadingInCell(index, title) {
+    stopCellPlayback(index);
+    cellData[index] = {source: '', isLive: false, title: `检测编码: ${title}`};
+
+    const liveIframe = document.getElementById(`live-iframe-${index}`);
+    const dplayerContainer = document.getElementById(`dplayer-${index}`);
+    const nativePlayer = document.getElementById(`native-player-${index}`);
+    const emptyState = document.getElementById(`empty-state-${index}`);
+    const label = document.getElementById(`label-${index}`);
+    const closeBtn = document.getElementById(`close-cell-${index}`);
+
+    if (liveIframe) liveIframe.classList.add('hidden');
+    if (dplayerContainer) dplayerContainer.classList.add('hidden');
+    if (nativePlayer) nativePlayer.classList.add('hidden');
+    if (label) {
+        label.classList.remove('hidden');
+        label.innerText = title;
+    }
+    if (closeBtn) {
+        closeBtn.classList.remove('hidden');
+        closeBtn.classList.add('flex');
+    }
+    if (emptyState) {
+        emptyState.classList.remove('hidden');
+        emptyState.classList.add('pointer-events-none');
+        emptyState.innerHTML = `
+            <div class="rounded-lg border border-white/10 bg-black/45 px-4 py-2 text-xs font-bold text-white/80 backdrop-blur-md">
+                正在检测编码...
+            </div>
+        `;
+    }
+    updateFocusUI();
+}
+
+function showCodecNoticeInCell(index, data) {
+    stopCellPlayback(index);
+
+    const liveIframe = document.getElementById(`live-iframe-${index}`);
+    const dplayerContainer = document.getElementById(`dplayer-${index}`);
+    const nativePlayer = document.getElementById(`native-player-${index}`);
+    const emptyState = document.getElementById(`empty-state-${index}`);
+    const label = document.getElementById(`label-${index}`);
+    const closeBtn = document.getElementById(`close-cell-${index}`);
+
+    if (!emptyState) return;
+
+    if (liveIframe) liveIframe.classList.add('hidden');
+    if (dplayerContainer) dplayerContainer.classList.add('hidden');
+    if (nativePlayer) nativePlayer.classList.add('hidden');
+    if (label) {
+        label.classList.remove('hidden');
+        label.innerText = `${data.title} · H.265`;
+    }
+    if (closeBtn) {
+        closeBtn.classList.remove('hidden');
+        closeBtn.classList.add('flex');
+    }
+
+    emptyState.classList.remove('hidden');
+    emptyState.classList.remove('pointer-events-none');
+    // 判断浏览器原生是否支持硬解 H.265
+    const supportHEVC = browserSupportsHEVC();
+
+    emptyState.innerHTML = `
+        <div class="max-w-[86%] rounded-lg border border-white/10 bg-black/55 px-4 py-3 text-center text-white shadow-xl backdrop-blur-md">
+            <div class="text-sm font-bold mb-1">当前录像为 H.265 原画</div>
+            <div class="text-[10px] leading-relaxed text-white/75 mb-3">
+                ${supportHEVC ? '✨ 您的设备支持 H.265 硬件解码，推荐使用原画播放，CPU 零损耗。' : '⚠️ 当前浏览器不支持直接解码。建议使用按需转码(消耗服务器性能)。'}
+            </div>
+            <div class="flex flex-col space-y-2 items-center">
+                ${supportHEVC ? `
+                <button onclick="event.stopPropagation(); playRemuxRecord(${index})" class="w-full rounded-md bg-green-600 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-green-500 active:scale-95 transition-all">
+                    ▶ 原画播放 (硬解推荐)
+                </button>
+                ` : ''}
+                ${data.canTranscode ? `
+                <button onclick="event.stopPropagation(); playTranscodedRecord(${index})" class="${supportHEVC ? 'bg-gray-600 hover:bg-gray-500' : 'bg-blue-600 hover:bg-blue-500'} w-full rounded-md px-3 py-1.5 text-xs font-bold text-white shadow active:scale-95 transition-all">
+                    ${supportHEVC ? '备用：服务器转码播放' : '▶ 兼容模式 (服务器转码)'}
+                </button>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+// 增加对应的播放函数
+function playRemuxRecord(index) {
+    const data = cellData[index];
+    if (!data || !data.file) return;
+
+    activeCell = index;
+    // 指向新的 fMP4 重封装后端接口
+    const remuxUrl = `/play_remux/${encodeURI(data.file.path)}`;
+    const title = `硬解播放: ${data.title}`;
+    cellData[index] = {source: remuxUrl, isLive: false, title};
+
+    // 这种模式下，直接交给原生 <video> 标签播放
+    executePlayInCell(index, remuxUrl, false, title, true);
+    updateFocusUI();
+}
+
+function playTranscodedRecord(index) {
+    const data = cellData[index];
+    if (!data || !data.file) return;
+
+    activeCell = index;
+    const transcodeUrl = `/play_transcode/${encodeURI(data.file.path)}`;
+    const title = `转码播放: ${data.title}`;
+    cellData[index] = {source: transcodeUrl, isLive: false, title};
+    executePlayInCell(index, transcodeUrl, false, title);
+    updateFocusUI();
+}
+
+function executePlayInCell(index, source, isLive, title, forceNative = false) {
     const liveIframe = document.getElementById(`live-iframe-${index}`);
     const dplayerContainer = document.getElementById(`dplayer-${index}`);
     const nativePlayer = document.getElementById(`native-player-${index}`);
@@ -457,7 +623,9 @@ function executePlayInCell(index, source, isLive, title) {
     if(!liveIframe) return;
 
     stopCellPlayback(index);
+    resetEmptyState(index);
     emptyState.classList.add('hidden');
+    emptyState.classList.add('pointer-events-none');
     label.classList.remove('hidden');
     label.innerText = title;
     if (closeBtn) {
@@ -478,7 +646,11 @@ function executePlayInCell(index, source, isLive, title) {
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
             /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
 
-        if (isApple) {
+        const isTranscodedStream = source.startsWith('/play_transcode/');
+        const isRemuxStream = source.startsWith('/play_remux/');
+
+        // 如果是苹果设备、或者我们强制请求了 fMP4 重封装接口，都使用原生 video 标签
+        if (forceNative || isRemuxStream || (isApple && !isTranscodedStream)) {
             dplayerContainer.classList.add('hidden');
             nativePlayer.classList.remove('hidden');
             let playUrl = source;
@@ -512,6 +684,16 @@ function executePlayInCell(index, source, isLive, title) {
             });
         }
     }
+}
+
+function resetEmptyState(index) {
+    const emptyState = document.getElementById(`empty-state-${index}`);
+    if (!emptyState) return;
+
+    emptyState.innerHTML = `
+        <svg class="w-8 h-8 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+        <span class="text-xs font-bold tracking-wider uppercase opacity-50">窗口 ${index + 1}</span>
+    `;
 }
 
 // --- 历史录像逻辑 ---
@@ -574,7 +756,7 @@ async function loadRecords(camId) {
                 const item = document.createElement('div');
                 item.className = 'flex justify-between items-center p-2.5 text-xs rounded-lg bg-white border border-gray-100 hover:border-blue-400 hover:text-blue-600 cursor-pointer transition-all shadow-sm group';
                 item.onclick = () => {
-                    playVideo(file.url, false, `🎬 回放: ${camId} (${timeDisplay})`);
+                    playRecord(file, `🎬 回放: ${camId} (${timeDisplay})`);
                 };
                 item.innerHTML = `
                 <div class="flex items-center">
