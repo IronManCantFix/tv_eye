@@ -221,11 +221,13 @@ func handlePlayRemux(c *gin.Context) {
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", fullPath,
-		"-c:v", "copy", // 核心：直接复制 H.265 原始数据
+		"-map", "0:v:0", // 显式映射第一个视频流
+		"-map", "0:a?", // 显式映射音频流（如果有的话）
+		"-c:v", "copy", // 直接复制 H.265 原始数据
+		"-tag:v", "hvc1", // 强制将 HEVC 标签设为 hvc1，满足苹果 Safari 的苛刻要求
 		"-c:a", "aac", // 音频由于监控多为 G711，浏览器不支持，需要转码 AAC（极低开销）
 		"-f", "mp4", // 封装为 MP4
-		// 关键标志：让 MP4 变成流式结构 (Fragmented MP4)，不需要等文件全部处理完就能播放
-		"-movflags", "frag_keyframe+empty_moov",
+		"-movflags", "frag_keyframe+empty_moov", // 让 MP4 变成流式结构 (Fragmented MP4)，不需要等文件全部处理完就能播放
 		"pipe:1", // 输出到标准流
 	}
 

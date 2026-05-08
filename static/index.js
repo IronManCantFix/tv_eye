@@ -168,7 +168,7 @@ async function scanUnmanagedStreams() {
             `;
             listDiv.appendChild(tag);
         });
-    } catch(e) {
+    } catch (e) {
         listDiv.innerHTML = `<span class="text-xs text-red-500 font-bold">扫描失败: ${e.message}</span>`;
     }
 }
@@ -305,7 +305,7 @@ function setLayout(layoutCount) {
 
     [1, 4, 6].forEach(num => {
         const btn = document.getElementById(`btn-layout-${num}`);
-        if(num === layoutCount) {
+        if (num === layoutCount) {
             btn.classList.add('bg-blue-600/50', 'text-white');
             btn.classList.remove('text-gray-400');
         } else {
@@ -443,7 +443,7 @@ function previewLive(camId) {
 }
 
 function playVideo(source, isLive, title) {
-    cellData[activeCell] = { source, isLive, title };
+    cellData[activeCell] = {source, isLive, title};
     executePlayInCell(activeCell, source, isLive, title);
 
     if (isLive && currentLayout > 1) {
@@ -461,26 +461,43 @@ async function playRecord(file, title) {
     try {
         const resp = await fetch(`/api/record/probe?path=${encodeURIComponent(file.path)}`);
         const probe = await resp.json();
-        const needsHelp = probe.can_probe && probe.is_h265 && !browserSupportsHEVC();
-        if (needsHelp) {
-            const noticeData = {
-                codecNotice: true,
-                source: file.url,
-                isLive: false,
-                title,
-                file,
-                codec: probe.codec || 'hevc',
-                canTranscode: !isMobilePlayback()
-            };
-            cellData[targetCell] = noticeData;
-            showCodecNoticeInCell(targetCell, noticeData);
-            updateFocusUI();
-            return;
+
+        // 探测成功，且确实是 H.265 编码
+        if (probe.can_probe && probe.is_h265) {
+            const supportHEVC = browserSupportsHEVC();
+
+            if (supportHEVC) {
+                // 设备支持 H.265 时，绝不走 HLS/ts 逻辑，强制走 fMP4 重封装！
+                // 这样能完美避开 iOS "有声音没画面" 的黑屏 Bug
+                const remuxUrl = `/play_remux/${encodeURI(file.path)}`;
+                cellData[targetCell] = {source: remuxUrl, isLive: false, title};
+
+                // 传 true 强制使用原生的 <video> 标签播放 mp4 流
+                executePlayInCell(targetCell, remuxUrl, false, title, true);
+                updateFocusUI();
+                return; // 直接返回，拦截默认的 TS 播放逻辑
+            } else {
+                // 设备不支持 H.265，弹出让用户选择转码 H.264 的提示
+                const noticeData = {
+                    codecNotice: true,
+                    source: file.url,
+                    isLive: false,
+                    title,
+                    file,
+                    codec: probe.codec || 'hevc',
+                    canTranscode: !isMobilePlayback()
+                };
+                cellData[targetCell] = noticeData;
+                showCodecNoticeInCell(targetCell, noticeData);
+                updateFocusUI();
+                return; // 同样拦截
+            }
         }
     } catch (e) {
         console.warn('编码探测失败，尝试直接播放:', e);
     }
 
+    // 非 H.265 或者是普通的 H.264 文件，走原本默认的 HLS 或 mpegts 播放
     cellData[targetCell] = {source: file.url, isLive: false, title};
     executePlayInCell(targetCell, file.url, false, title);
     updateFocusUI();
@@ -620,7 +637,7 @@ function executePlayInCell(index, source, isLive, title, forceNative = false) {
     const label = document.getElementById(`label-${index}`);
     const closeBtn = document.getElementById(`close-cell-${index}`);
 
-    if(!liveIframe) return;
+    if (!liveIframe) return;
 
     stopCellPlayback(index);
     resetEmptyState(index);
@@ -649,12 +666,13 @@ function executePlayInCell(index, source, isLive, title, forceNative = false) {
         const isTranscodedStream = source.startsWith('/play_transcode/');
         const isRemuxStream = source.startsWith('/play_remux/');
 
-        // 如果是苹果设备、或者我们强制请求了 fMP4 重封装接口，都使用原生 video 标签
+        // 如果强制原生，或是转码/重封装流，或在苹果上，都用原生播放器
         if (forceNative || isRemuxStream || (isApple && !isTranscodedStream)) {
             dplayerContainer.classList.add('hidden');
             nativePlayer.classList.remove('hidden');
             let playUrl = source;
-            if (source.endsWith('.ts')) {
+            // 只有原始的 TS 文件才去走 HLS，转码和重封装的流绝对不能改前缀
+            if (source.endsWith('.ts') && !isRemuxStream && !isTranscodedStream) {
                 playUrl = source.replace('/play/', '/play_hls/');
             }
             nativePlayer.src = playUrl;
