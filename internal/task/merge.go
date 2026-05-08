@@ -82,8 +82,12 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 		return err
 	}
 
+	// 原始碎片的扩展名 (例如 .ts)
 	ext := "." + strings.TrimPrefix(cam.Format, ".")
-	mergedName := fmt.Sprintf("%s_%s%s%s", cam.ID, date, mergedSuffix, ext)
+
+	// 强制最终合并文件的扩展名为 .mp4
+	mergedExt := ".mp4"
+	mergedName := fmt.Sprintf("%s_%s%s%s", cam.ID, date, mergedSuffix, mergedExt)
 	mergedPath := filepath.Join(dateDir, mergedName)
 	if _, err := os.Stat(mergedPath); err == nil {
 		return nil
@@ -95,6 +99,7 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 			continue
 		}
 		name := entry.Name()
+		// 找出当天所有的原始碎片，且排除已存在的合并文件
 		if filepath.Ext(name) != ext || strings.Contains(name, mergedSuffix) {
 			continue
 		}
@@ -106,7 +111,8 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 	}
 	sort.Strings(fragments)
 
-	tempOutput := mergedPath + ".tmp" + ext
+	// 临时文件也强制使用 mp4 后缀
+	tempOutput := mergedPath + ".tmp" + mergedExt
 	listPath, err := writeConcatList(fragments)
 	if err != nil {
 		return err
@@ -114,16 +120,18 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 	defer os.Remove(listPath)
 	defer os.Remove(tempOutput)
 
+	// FFmpeg 参数，打造纯净完美的 Web 播放格式
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
+		"-y", // 强制覆盖可能存在的异常临时文件
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listPath,
-		"-c", "copy",
-	}
-	if cam.Format == "mp4" {
-		args = append(args, "-movflags", "+faststart")
+		"-c:v", "copy", // 视频无损极速拼接 (占用极低 CPU)
+		"-tag:v", "hvc1", // 给 H.265 打上苹果能识别的标签，防止 Safari/iOS 黑屏
+		"-c:a", "aac", // 监控音频多为 alaw/ulaw(G.711)，必须转码为 AAC，否则浏览器没声音
+		"-movflags", "+faststart", // 将 moov atom 移到文件头部，完美支持超大文件的 HTTP Range 拖拽秒播
 	}
 	args = append(args, tempOutput)
 
@@ -137,6 +145,7 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 		return err
 	}
 
+	// 合并成功后，删除原始切片
 	for _, fragment := range fragments {
 		if err := os.Remove(fragment); err != nil {
 			log.Printf("[%s] 合并成功但删除碎片失败: %s, err=%v", cam.ID, fragment, err)
