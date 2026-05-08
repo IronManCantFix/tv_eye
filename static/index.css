@@ -1,0 +1,16 @@
+.custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+.dplayer-video-wrap {
+    background-color: #000 !important;
+}
