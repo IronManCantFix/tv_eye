@@ -49,6 +49,10 @@ CamKeep 是一款基于 Go 语言开发，深度集成 **go2rtc** 和 **FFmpeg**
 具体配置项说明，请阅览：[配置说明文档 (conf_usage.md)](https://github.com/r0n9/camkeep/blob/main/conf_usage.md)
 
 ```yaml
+daily_merge:
+  enabled: false          # 是否每天合并前一天碎片录像
+  time: "03:30"           # 每日合并时间，建议放在低峰时段
+
 cameras:
 # 普通录制模式示例
   - id: "front-door"      # 摄像头唯一ID (英文/数字)
@@ -127,4 +131,3 @@ This project uses:
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=r0n9/camkeep&type=date&legend=top-left" />
  </picture>
 </a>
-

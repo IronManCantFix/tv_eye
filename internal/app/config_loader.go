@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/r0n9/camkeep/constant"
 	"gopkg.in/yaml.v3"
@@ -21,6 +22,10 @@ func loadOrInitConfig() constant.Config {
 
 			// 定义默认配置模板
 			defaultCfg := constant.Config{
+				DailyMerge: constant.DailyMergeConfig{
+					Enabled: false,
+					Time:    "03:30",
+				},
 				Cameras: []constant.Camera{
 					{
 						ID:              "摄像头1",
@@ -67,6 +72,15 @@ func loadOrInitConfig() constant.Config {
 
 // checkDuplicateIDs 检查配置中是否有重复的摄像头ID (用于 API 严格校验)
 func checkDuplicateIDs(cfg constant.Config) error {
+	if cfg.DailyMerge.Enabled && cfg.DailyMerge.Time == "" {
+		return fmt.Errorf("daily_merge.time 不能为空")
+	}
+	if cfg.DailyMerge.Time != "" {
+		if _, err := time.Parse("15:04", cfg.DailyMerge.Time); err != nil {
+			return fmt.Errorf("daily_merge.time 必须使用 HH:mm 格式")
+		}
+	}
+
 	seen := make(map[string]bool)
 	for _, cam := range cfg.Cameras {
 		if cam.ID == "" {
@@ -82,6 +96,10 @@ func checkDuplicateIDs(cfg constant.Config) error {
 
 // validateAndFixConfig 修复文件读取时的配置 (用于启动时静默去重防崩溃)
 func validateAndFixConfig(cfg constant.Config) constant.Config {
+	if cfg.DailyMerge.Time == "" {
+		cfg.DailyMerge.Time = "03:30"
+	}
+
 	seen := make(map[string]bool)
 	var uniqueCams []constant.Camera
 

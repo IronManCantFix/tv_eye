@@ -15,11 +15,15 @@ func startTasks() {
 	ctx, reloadCancel = context.WithCancel(ctxGlobal)
 
 	constant.ConfigMux.RLock()
-	cams := currentConfig.Cameras
+	cfg := currentConfig
+	cams := cfg.Cameras
 	constant.ConfigMux.RUnlock()
 
 	taskWg.Add(1)
 	go task.CleanupTask(ctx, &taskWg, cams)
+
+	taskWg.Add(1)
+	go task.DailyMergeTask(ctx, &taskWg, cfg)
 
 	for _, cam := range cams {
 		taskWg.Add(1)

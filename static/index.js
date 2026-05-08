@@ -83,6 +83,7 @@ async function executeConfirmAction() {
 async function openConfig() {
     const resp = await fetch('/api/config');
     document.getElementById('configYaml').value = await resp.text();
+    syncMergeControlsFromYaml();
     document.getElementById('configModal').classList.remove('hidden');
 }
 
@@ -91,6 +92,7 @@ function closeConfig() {
 }
 
 async function saveConfig() {
+    applyMergeControlsToYaml();
     const yamlText = document.getElementById('configYaml').value;
     const resp = await fetch('/api/config', {method: 'POST', body: yamlText});
     if (resp.ok) {
@@ -101,6 +103,30 @@ async function saveConfig() {
         const err = await resp.json();
         alert('保存失败: ' + err.error);
     }
+}
+
+function syncMergeControlsFromYaml() {
+    const yamlText = document.getElementById('configYaml').value;
+    const enabledMatch = yamlText.match(/daily_merge:\s*\n(?:[ \t].*\n)*?[ \t]+enabled:\s*(true|false)/i);
+    const timeMatch = yamlText.match(/daily_merge:\s*\n(?:[ \t].*\n)*?[ \t]+time:\s*["']?([0-2]\d:[0-5]\d)["']?/i);
+
+    document.getElementById('dailyMergeEnabled').checked = enabledMatch ? enabledMatch[1].toLowerCase() === 'true' : false;
+    document.getElementById('dailyMergeTime').value = timeMatch ? timeMatch[1] : '03:30';
+}
+
+function applyMergeControlsToYaml() {
+    const textArea = document.getElementById('configYaml');
+    const enabled = document.getElementById('dailyMergeEnabled').checked ? 'true' : 'false';
+    const time = document.getElementById('dailyMergeTime').value || '03:30';
+    const block = `daily_merge:\n  enabled: ${enabled}\n  time: "${time}"`;
+
+    let content = textArea.value.trimStart();
+    if (content.match(/(^|\n)daily_merge:\s*\n(?:[ \t].*\n)*/)) {
+        content = content.replace(/(^|\n)daily_merge:\s*\n(?:[ \t].*\n)*/, `$1${block}\n`);
+    } else {
+        content = block + '\n' + content;
+    }
+    textArea.value = content;
 }
 
 async function scanUnmanagedStreams() {

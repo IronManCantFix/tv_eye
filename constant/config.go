@@ -18,7 +18,13 @@ type Camera struct {
 	AutoDiscovered bool `yaml:"auto_discovered"` // 标识这个流是手动配置的，还是从 go2rtc 自动发现的
 }
 
+type DailyMergeConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Time    string `yaml:"time"`
+}
+
 // Config 对应 yaml 配置文件
 type Config struct {
-	Cameras []Camera `yaml:"cameras"`
+	DailyMerge DailyMergeConfig `yaml:"daily_merge"`
+	Cameras    []Camera         `yaml:"cameras"`
 }

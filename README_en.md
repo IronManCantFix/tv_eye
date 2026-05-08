@@ -51,6 +51,10 @@ Create a base directory on your NAS (e.g., `/vol1/CamKeep`) and create `config/c
 For detailed configuration options, see: [Configuration Usage (conf_usage.md)](https://github.com/r0n9/camkeep/blob/main/conf_usage.md)
 
 ```yaml
+daily_merge:
+  enabled: false          # Merge yesterday's video segments every day
+  time: "03:30"           # Daily merge time, preferably during off-peak hours
+
 cameras:
 # Normal recording mode example
   - id: "front-door"      # Unique ID (Alphanumeric)
