@@ -5,6 +5,7 @@ let dpInstances = new Array(6).fill(null);
 let cellData = new Array(6).fill(null);
 let currentSelectedCam = null;
 let pendingAction = null;
+let compactGrid = window.innerWidth < 640;
 
 window.onload = function () {
     if (typeof DPlayer === 'undefined') {
@@ -14,6 +15,13 @@ window.onload = function () {
     setLayout(1);
     loadStatus();
     setInterval(loadStatus, 5000);
+    window.addEventListener('resize', () => {
+        const nextCompactGrid = window.innerWidth < 640;
+        if (nextCompactGrid !== compactGrid) {
+            compactGrid = nextCompactGrid;
+            renderGrid();
+        }
+    });
 };
 
 // --- 控制面板动作弹窗 ---
@@ -313,7 +321,7 @@ function renderGrid() {
     grid.className = 'w-full flex-1 min-h-0 p-1 bg-black grid gap-1 transition-all duration-300 ' +
         (currentLayout === 1 ? 'grid-cols-1 grid-rows-1' :
             currentLayout === 4 ? 'grid-cols-2 grid-rows-2' :
-                'grid-cols-3 grid-rows-2');
+                compactGrid ? 'grid-cols-2 grid-rows-3' : 'grid-cols-3 grid-rows-2');
 
     grid.innerHTML = '';
 
@@ -328,7 +336,10 @@ function renderGrid() {
                     <svg class="w-8 h-8 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
                     <span class="text-xs font-bold tracking-wider uppercase opacity-50">窗口 ${i + 1}</span>
                 </div>
-                <div class="absolute top-2 left-2 z-10 bg-black/60 text-white px-2 py-1 text-[10px] rounded backdrop-blur-md border border-white/10 hidden pointer-events-none" id="label-${i}"></div>
+                <div class="absolute top-2 left-2 z-10 bg-black/35 text-white/80 px-2 py-1 text-[10px] rounded backdrop-blur-sm border border-white/5 hidden pointer-events-none truncate opacity-55 transition-all duration-200 group-hover:bg-black/70 group-hover:text-white group-hover:border-white/10 group-hover:opacity-100" id="label-${i}"></div>
+                <button onclick="event.stopPropagation(); clearCell(${i})" class="absolute top-2 right-2 z-20 hidden h-7 w-7 items-center justify-center rounded bg-black/65 text-white/80 border border-white/10 backdrop-blur-md opacity-0 pointer-events-none transition-all duration-200 group-hover:opacity-100 group-hover:pointer-events-auto hover:bg-red-500 hover:text-white" id="close-cell-${i}" title="关闭该窗口">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
             </div>
         `;
         grid.insertAdjacentHTML('beforeend', cellHtml);
@@ -338,6 +349,54 @@ function renderGrid() {
         }
     }
     updateFocusUI();
+}
+
+function closeActiveCell() {
+    clearCell(activeCell);
+}
+
+function clearCell(index) {
+    stopCellPlayback(index);
+    cellData[index] = null;
+
+    const liveIframe = document.getElementById(`live-iframe-${index}`);
+    const dplayerContainer = document.getElementById(`dplayer-${index}`);
+    const nativePlayer = document.getElementById(`native-player-${index}`);
+    const emptyState = document.getElementById(`empty-state-${index}`);
+    const label = document.getElementById(`label-${index}`);
+    const closeBtn = document.getElementById(`close-cell-${index}`);
+
+    if (liveIframe) liveIframe.classList.add('hidden');
+    if (dplayerContainer) dplayerContainer.classList.add('hidden');
+    if (nativePlayer) nativePlayer.classList.add('hidden');
+    if (emptyState) emptyState.classList.remove('hidden');
+    if (label) {
+        label.classList.add('hidden');
+        label.innerText = '';
+    }
+    if (closeBtn) {
+        closeBtn.classList.add('hidden');
+        closeBtn.classList.remove('flex');
+    }
+    updateFocusUI();
+}
+
+function stopCellPlayback(index) {
+    const liveIframe = document.getElementById(`live-iframe-${index}`);
+    const nativePlayer = document.getElementById(`native-player-${index}`);
+
+    if (dpInstances[index]) {
+        dpInstances[index].destroy();
+        dpInstances[index] = null;
+    }
+    if (nativePlayer) {
+        nativePlayer.pause();
+        nativePlayer.removeAttribute('src');
+        nativePlayer.load();
+    }
+    if (liveIframe) {
+        liveIframe.src = 'about:blank';
+    }
 }
 
 function setActiveCell(index) {
@@ -393,16 +452,17 @@ function executePlayInCell(index, source, isLive, title) {
     const nativePlayer = document.getElementById(`native-player-${index}`);
     const emptyState = document.getElementById(`empty-state-${index}`);
     const label = document.getElementById(`label-${index}`);
+    const closeBtn = document.getElementById(`close-cell-${index}`);
 
     if(!liveIframe) return;
 
+    stopCellPlayback(index);
     emptyState.classList.add('hidden');
     label.classList.remove('hidden');
     label.innerText = title;
-
-    if (dpInstances[index]) {
-        dpInstances[index].destroy();
-        dpInstances[index] = null;
+    if (closeBtn) {
+        closeBtn.classList.remove('hidden');
+        closeBtn.classList.add('flex');
     }
 
     if (isLive) {

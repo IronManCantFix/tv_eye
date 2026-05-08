@@ -14,3 +14,21 @@
 .dplayer-video-wrap {
     background-color: #000 !important;
 }
+
+.dplayer,
+.dplayer-video-wrap,
+.dplayer-video-current {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.dplayer-video-current {
+    object-fit: contain;
+}
+
+@media (max-width: 640px) {
+    .dplayer-controller {
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+    }
+}

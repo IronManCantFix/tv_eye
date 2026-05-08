@@ -10,14 +10,14 @@
     <link rel="icon" href="/static/camkeep_w200.png">
     <link rel="stylesheet" href="/static/index.css">
 </head>
-<body class="bg-gray-100 p-4 md:p-8 min-h-screen">
+<body class="bg-gray-100 p-3 sm:p-4 md:p-8 min-h-screen">
 <div class="max-w-[1400px] mx-auto">
 
-    <div class="flex items-center justify-between mb-6">
-        <h1 class="text-3xl font-bold text-gray-800 flex items-center tracking-tight">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-5 md:mb-6">
+        <h1 class="text-2xl md:text-3xl font-bold text-gray-800 flex flex-wrap items-center gap-y-2 tracking-tight">
             <img src="/static/camkeep_w80.png" alt="CamKeep" class="w-9 h-9 mr-3 object-contain drop-shadow-sm">
             CamKeep 监控中心
-            <div class="ml-4 flex items-center space-x-3">
+            <div class="ml-0 sm:ml-4 flex items-center space-x-3">
                 <span class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10 shadow-sm font-mono">
                     <svg class="w-3.5 h-3.5 mr-1.5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
@@ -31,7 +31,7 @@
                 </a>
             </div>
         </h1>
-        <div class="flex items-center space-x-4">
+        <div class="flex items-center justify-between sm:justify-end space-x-3 sm:space-x-4">
             <button onclick="openConfig()" class="group flex items-center space-x-2 bg-white hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm font-bold border border-gray-200 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 active:scale-95">
                 <svg class="w-4 h-4 text-gray-500 group-hover:rotate-90 transition-transform duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
@@ -150,25 +150,25 @@
         </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6 mb-6 md:mb-8">
 
-        <div class="lg:col-span-1 bg-white p-4 rounded-xl shadow-sm border-t-4 border-blue-500 flex flex-col h-[500px]">
+        <div class="lg:col-span-1 bg-white p-4 rounded-xl shadow-sm border-t-4 border-blue-500 flex flex-col h-[320px] lg:h-[560px]">
             <h2 class="font-bold mb-4 text-lg text-gray-700 flex items-center">实时节点</h2>
             <div id="camList" class="space-y-2 overflow-y-auto flex-1 pr-1 custom-scrollbar">
                 <div class="text-sm text-gray-400 text-center py-10">正在同步设备状态...</div>
             </div>
         </div>
 
-        <div id="video-wrapper" class="lg:col-span-3 bg-gray-900 rounded-xl shadow-xl overflow-hidden relative h-[500px] flex flex-col border border-gray-800 transition-all duration-300">
+        <div id="video-wrapper" class="lg:col-span-3 bg-gray-900 rounded-xl shadow-xl overflow-hidden relative h-[58vh] min-h-[320px] max-h-[620px] lg:h-[560px] lg:max-h-none flex flex-col border border-gray-800 transition-all duration-300">
 
             <div id="video-grid" class="w-full flex-1 min-h-0 p-1 bg-black grid gap-1 transition-all duration-300"></div>
 
-            <div class="flex justify-between items-center px-4 py-3 bg-[#0f172a] border-t border-gray-800 shrink-0 z-20">
-                <div class="bg-gray-800/80 text-gray-300 px-3 py-1.5 text-xs font-bold rounded-lg border border-gray-700/50" id="focusIndicator">
+            <div class="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center px-3 sm:px-4 py-3 bg-[#0f172a] border-t border-gray-800 shrink-0 z-20">
+                <div class="bg-gray-800/80 text-gray-300 px-3 py-1.5 text-xs font-bold rounded-lg border border-gray-700/50 truncate" id="focusIndicator">
                     当前焦点: <span id="currentCam" class="text-blue-400 ml-1 tracking-wide">窗口 1</span>
                 </div>
 
-                <div class="flex bg-gray-800/80 p-1 rounded-lg border border-gray-700/50 items-center">
+                <div class="flex bg-gray-800/80 p-1 rounded-lg border border-gray-700/50 items-center self-start sm:self-auto">
                     <button onclick="setLayout(1)" id="btn-layout-1" class="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-all" title="单画面">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-width="2"></rect></svg>
                     </button>
@@ -180,6 +180,10 @@
                     </button>
 
                     <div class="w-px h-5 bg-gray-600/50 mx-1.5"></div>
+
+                    <button onclick="closeActiveCell()" class="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-red-500/80 transition-all" title="关闭当前播放">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
 
                     <button onclick="toggleMatrixFullscreen()" class="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-all" title="多宫格全屏 (Esc退出)">
                         <svg id="icon-fullscreen-enter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
