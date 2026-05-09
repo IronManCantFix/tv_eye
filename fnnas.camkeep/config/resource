@@ -1,0 +1,48 @@
+{
+    "docker-project":
+    {
+        "projects":
+        [
+            {
+                "name": "camkeep",
+                "path": "docker"
+            }
+        ]
+    },
+    "data-share":
+    {
+        "shares":
+        [
+            {
+                "name": "camkeep",
+                "permission":
+                {
+                    "rw":
+                    [
+                        "docker-camkeep"
+                    ]
+                }
+            },
+            {
+                "name": "camkeep/config",
+                "permission":
+                {
+                    "rw":
+                    [
+                        "docker-camkeep"
+                    ]
+                }
+            },
+            {
+                "name": "camkeep/records",
+                "permission":
+                {
+                    "rw":
+                    [
+                        "docker-camkeep"
+                    ]
+                }
+            }
+        ]
+    }
+}

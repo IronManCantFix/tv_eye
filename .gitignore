@@ -3,6 +3,9 @@
 /.git/
 !.mvn/wrapper/maven-wrapper.jar
 
+### OS ###
+.DS_Store
+
 ### STS ###
 .apt_generated
 .classpath
@@ -35,15 +38,23 @@
 
 ### exe ###
 *.exe
+/camkeep
+/main
+*.test
+*.out
 
+### recordings ###
 *.mp4
 *.ts
 
-### log ###
-*.log
-main
-log/
-records
-fnnas.camkeep
-go2rtc
-go2rtc.yaml
+### local runtime data ###
+/config/
+/log/
+/records/
+/go2rtc
+/go2rtc.yaml
+fnnas.camkeep/**/.DS_Store
+fnnas.camkeep/*.fpk
+
+### local notes ###
+/todo.md

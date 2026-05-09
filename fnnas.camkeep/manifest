@@ -1,0 +1,10 @@
+appname               = camkeep
+version               = 1.0.0
+display_name          = CamKeep
+desc                  = app-description
+arch                  = x86_64
+source                = thirdparty
+maintainer            = your-name
+distributor           = your-name
+desktop_uidir         = ui
+desktop_applaunchname = camkeep.Application

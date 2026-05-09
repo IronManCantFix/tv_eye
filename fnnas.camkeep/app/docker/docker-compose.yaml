@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  camkeep:
+    image: r0n9/camkeep:latest
+    container_name: camkeep
+    restart: unless-stopped
+    network_mode: "host"
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - "${wizard_config_dir:-/vol1/1000/camkeep/config}:/app/config"
+      - "${wizard_records_dir:-/vol1/1000/camkeep/records}:/app/records"

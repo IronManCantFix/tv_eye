@@ -461,11 +461,7 @@ async function playRecord(file, title) {
 
         // 探测成功，且确实是 H.265 编码
         if (probe.can_probe && probe.is_h265) {
-            // 【精准识别】：iOS全系设备 + macOS纯Safari (排除 Mac 上的 Chrome/Edge)
-            const isIOS = /iPod|iPhone|iPad/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-            const isMacSafari = /Mac/.test(navigator.platform) && /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent) && !/Edg/i.test(navigator.userAgent);
-            const isAppleNative = isIOS || isMacSafari;
-
+            const isAppleNative = isAppleNativePlayback();
             const supportHEVC = browserSupportsHEVC();
 
             if (isAppleNative || !supportHEVC) {
@@ -526,6 +522,19 @@ function browserSupportsHEVC() {
     const video = document.createElement('video');
     const candidates = ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"'];
     return candidates.some(type => video.canPlayType(type) !== '');
+}
+
+function isAppleNativePlayback() {
+    const platform = navigator.platform || '';
+    const userAgent = navigator.userAgent || '';
+    const maxTouchPoints = navigator.maxTouchPoints || 0;
+
+    const isIOSDevice = /^(iPhone|iPad|iPod)$/.test(platform) || (platform === 'MacIntel' && maxTouchPoints > 1);
+    if (isIOSDevice) return true;
+
+    const isMacOS = /^Mac/.test(platform) || /Macintosh|Mac OS X/i.test(userAgent);
+    const isSafari = /Safari/i.test(userAgent) && !/(Chrome|Chromium|CriOS|FxiOS|Edg|OPR|OPiOS)/i.test(userAgent);
+    return isMacOS && isSafari;
 }
 
 function isMobilePlayback() {
@@ -703,11 +712,7 @@ function executePlayInCell(index, source, isLive, title, forceNative = false, wa
         liveIframe.classList.add('hidden');
         liveIframe.src = '';
 
-        // 【精准识别】：iOS全系设备 + macOS纯Safari
-        const isIOS = /iPod|iPhone|iPad/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        const isMacSafari = /Mac/.test(navigator.platform) && /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent) && !/Edg/i.test(navigator.userAgent);
-        const isAppleNative = isIOS || isMacSafari;
-
+        const isAppleNative = isAppleNativePlayback();
         const isTranscodedStream = source.startsWith('/play_transcode/');
         const isRemuxStream = source.startsWith('/play_remux/');
 

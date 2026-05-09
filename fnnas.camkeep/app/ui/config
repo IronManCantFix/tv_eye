@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "camkeep.Application": {
+            "title": "camkeep",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "",
+            "port": "9110",
+            "url": "/",
+            "allUsers": false
+        }
+    }
+}
