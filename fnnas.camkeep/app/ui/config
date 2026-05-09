@@ -4,7 +4,7 @@
             "title": "CamKeep",
             "icon": "images/icon_{0}.png",
             "type": "url",
-            "protocol": "",
+            "protocol": "http",
             "port": "9110",
             "url": "/",
             "allUsers": false
