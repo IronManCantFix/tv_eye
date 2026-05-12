@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -67,7 +68,10 @@ func handleSaveConfig(c *gin.Context) {
 		return
 	}
 
-	os.WriteFile(constant.ConfigFilePath, yamlBytes, 0644)
+	if err := os.WriteFile(constant.ConfigFilePath, yamlBytes, 0644); err != nil {
+		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
 
 	// 异步重启任务，不阻塞前端请求
 	go restartTasks(newConfig)
@@ -77,8 +81,24 @@ func handleSaveConfig(c *gin.Context) {
 func handleCameraAction(c *gin.Context) {
 	id := c.Param("id")
 	action := c.Param("action") // start, stop, auto
-	task.SetOverride(id, action)
+
+	if !cameraExists(id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到该摄像头"})
+		return
+	}
+	if err := task.SetOverride(id, action); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(200, gin.H{"msg": "指令已下发"})
+}
+
+func cameraExists(camID string) bool {
+	constant.ConfigMux.RLock()
+	defer constant.ConfigMux.RUnlock()
+	return slices.ContainsFunc(currentConfig.Cameras, func(cam constant.Camera) bool {
+		return cam.ID == camID
+	})
 }
 
 func handleRecords(c *gin.Context) {

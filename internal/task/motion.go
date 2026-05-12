@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/r0n9/camkeep/constant"
+	"github.com/r0n9/camkeep/util"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 	motionDetectFPS              = 2
 	motionDetectPixelThreshold   = 15
 	motionDetectRatioThreshold   = 0.01
+	motionDetectStateCheckDelay  = 1 * time.Second
 	motionDetectRestartDelay     = 3 * time.Second
 	motionDetectIdleLogInterval  = 5 * time.Second
 	motionDetectAlertLogInterval = 2 * time.Second
@@ -36,10 +38,6 @@ type motionFrameStats struct {
 func MotionDetectTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 	defer wg.Done()
 
-	if !motionRecordingEnabled(cam) {
-		return
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -47,17 +45,83 @@ func MotionDetectTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Came
 		default:
 		}
 
-		if err := runMotionDetector(ctx, cam); err != nil && ctx.Err() == nil {
-			log.Printf("[%s] 动态检测进程退出: %v，%s 后重试", cam.ID, err, motionDetectRestartDelay)
+		if !motionDetectionShouldRun(cam) {
+			resetMotionDetected(cam.ID)
+			if !waitMotionDetect(ctx, motionDetectStateCheckDelay) {
+				return
+			}
+			continue
 		}
 
-		timer := time.NewTimer(motionDetectRestartDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
+		if err := runMotionDetectorUntilDisabled(ctx, cam); err != nil && ctx.Err() == nil && motionDetectionShouldRun(cam) {
+			log.Printf("[%s] 动态检测进程退出: %v，%s 后重试", cam.ID, err, motionDetectRestartDelay)
+			if !waitMotionDetect(ctx, motionDetectRestartDelay) {
+				return
+			}
+			continue
 		}
+
+		if !waitMotionDetect(ctx, motionDetectStateCheckDelay) {
+			return
+		}
+	}
+}
+
+func motionDetectionShouldRun(cam constant.Camera) bool {
+	if !motionRecordingEnabled(cam) {
+		return false
+	}
+
+	control := getOverride(cam.ID)
+	inTimeRange := util.IsWithinTimeRange(cam.RecordTime)
+	if !recordingWindowEnabled(control, inTimeRange) {
+		return false
+	}
+
+	return currentStreamState(cam.ID) != "offline"
+}
+
+func runMotionDetectorUntilDisabled(ctx context.Context, cam constant.Camera) error {
+	detectorCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+
+		ticker := time.NewTicker(motionDetectStateCheckDelay)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-detectorCtx.Done():
+				return
+			case <-ticker.C:
+				if !motionDetectionShouldRun(cam) {
+					resetMotionDetected(cam.ID)
+					log.Printf("[%s] 动态检测条件不符，停止检测进程...", cam.ID)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	err := runMotionDetector(detectorCtx, cam)
+	cancel()
+	<-watcherDone
+	return err
+}
+
+func waitMotionDetect(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

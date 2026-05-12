@@ -49,6 +49,7 @@ func Run(appVersion string) {
 
 	// 加载持久化的手动录像覆盖指令
 	task.LoadOverrides()
+	task.PruneOverridesForCameras(currentConfig.Cameras)
 
 	// 设置全局 Context
 	var cancelGlobal context.CancelFunc
@@ -72,7 +73,6 @@ func Run(appVersion string) {
 	<-sigChan
 	log.Println("接收到退出信号，正在停止所有任务...")
 
-	task.CleanupGo2rtcStreams(currentConfig)
 	cancelGlobal() // 通知所有层级的 Context 退出
 	taskWg.Wait()  // 等待所有任务完成
 	log.Println("程序已安全退出。")

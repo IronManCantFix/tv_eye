@@ -64,6 +64,7 @@ func restartTasks(newConfig constant.Config) {
 
 	// 4. 【新增】清理内存中被删除的“幽灵”摄像头状态
 	cleanGhostStatus(newConfig)
+	task.PruneOverridesForCameras(newConfig.Cameras)
 
 	// 5. 启动新任务
 	startTasks()

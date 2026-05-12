@@ -17,26 +17,35 @@ import (
 )
 
 var (
-	overrideMux sync.RWMutex
-	overrides   = make(map[string]string) // key: 摄像头ID, value: "start", "stop", 或空("auto")
+	overrideMux     sync.RWMutex
+	overrideSaveMux sync.Mutex
+	overrides       = make(map[string]string) // key: 摄像头ID, value: "start", "stop", 或空("auto")
 )
 
 // SetOverride 设置手动录像指令
-func SetOverride(camID, action string) {
-	overrideMux.Lock()
-	if action == "auto" {
-		delete(overrides, camID) // 恢复自动
-	} else if action == "start" {
-		overrides[camID] = action
-	} else if action == "stop" {
-		overrides[camID] = action
-		service.UpdateRecordStatus(camID, false)
+func SetOverride(camID, action string) error {
+	if camID == "" {
+		return fmt.Errorf("摄像头 ID 不能为空")
 	}
 
+	overrideMux.Lock()
+	switch action {
+	case "auto":
+		delete(overrides, camID) // 恢复自动
+	case "start":
+		overrides[camID] = action
+	case "stop":
+		overrides[camID] = action
+		service.UpdateRecordStatus(camID, false)
+	default:
+		overrideMux.Unlock()
+		return fmt.Errorf("无效的手动录像指令: %s", action)
+	}
 	overrideMux.Unlock()
 
 	// 异步保存到磁盘，不阻塞当前 API 请求
 	go SaveOverrides()
+	return nil
 }
 
 // getOverride 获取当前的手动指令
@@ -405,9 +414,6 @@ func startFFmpeg(ctx context.Context, cam constant.Camera, camDir string) *exec.
 
 // LoadOverrides 在程序启动时调用（例如 main 函数开头）
 func LoadOverrides() {
-	overrideMux.Lock()
-	defer overrideMux.Unlock()
-
 	data, err := os.ReadFile(constant.OverridesFilePath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -417,15 +423,41 @@ func LoadOverrides() {
 		return
 	}
 
-	if err := json.Unmarshal(data, &overrides); err != nil {
+	loaded := make(map[string]string)
+	if err := json.Unmarshal(data, &loaded); err != nil {
 		log.Printf("解析手动录像指令文件失败: %v", err)
-	} else {
-		log.Printf("成功加载了 %d 个摄像头的覆盖指令", len(overrides))
+		return
 	}
+	if loaded == nil {
+		loaded = make(map[string]string)
+	}
+
+	cleaned := make(map[string]string, len(loaded))
+	for camID, action := range loaded {
+		if camID == "" {
+			continue
+		}
+		switch action {
+		case "start", "stop":
+			cleaned[camID] = action
+		case "", "auto":
+			// auto 不需要持久化。
+		default:
+			log.Printf("[%s] 忽略无效的手动录像指令: %s", camID, action)
+		}
+	}
+
+	overrideMux.Lock()
+	overrides = cleaned
+	overrideMux.Unlock()
+	log.Printf("成功加载了 %d 个摄像头的覆盖指令", len(cleaned))
 }
 
 // SaveOverrides 将当前的 overrides 写入文件
 func SaveOverrides() {
+	overrideSaveMux.Lock()
+	defer overrideSaveMux.Unlock()
+
 	overrideMux.RLock()
 	// 注意：这里用深拷贝把数据拿出来再写入，避免在进行磁盘 I/O 时长时间阻塞其他 goroutine 获取读写锁
 	mapCopy := make(map[string]string, len(overrides))
@@ -446,5 +478,27 @@ func SaveOverrides() {
 	// 写入文件
 	if err := os.WriteFile(constant.OverridesFilePath, data, 0644); err != nil {
 		log.Printf("保存手动录像指令到文件失败: %v", err)
+	}
+}
+
+func PruneOverridesForCameras(cameras []constant.Camera) {
+	validIDs := make(map[string]bool, len(cameras))
+	for _, cam := range cameras {
+		validIDs[cam.ID] = true
+	}
+
+	changed := false
+	overrideMux.Lock()
+	for camID := range overrides {
+		if !validIDs[camID] {
+			delete(overrides, camID)
+			changed = true
+			log.Printf("[%s] 已清理无效的手动录像指令", camID)
+		}
+	}
+	overrideMux.Unlock()
+
+	if changed {
+		SaveOverrides()
 	}
 }

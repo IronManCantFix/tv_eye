@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/r0n9/camkeep/constant"
+	"github.com/r0n9/camkeep/internal/service"
 )
 
 func TestCompareMotionFramesDetectsMotion(t *testing.T) {
@@ -88,6 +89,36 @@ func TestRecordingWindowEnabled(t *testing.T) {
 				t.Fatalf("expected %t, got %t", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestMotionDetectionShouldRunRespectsOverrideStop(t *testing.T) {
+	cam := constant.Camera{ID: "motion-override-stop", Mode: "normal", MotionDetect: true}
+	setOverridesForTest(t, map[string]string{cam.ID: "stop"})
+	setStreamStateForTest(t, cam.ID, "online")
+
+	if motionDetectionShouldRun(cam) {
+		t.Fatal("expected manual stop override to block motion detection")
+	}
+}
+
+func TestMotionDetectionShouldRunAllowsIdleStream(t *testing.T) {
+	cam := constant.Camera{ID: "motion-idle-stream", Mode: "normal", MotionDetect: true}
+	setOverridesForTest(t, nil)
+	setStreamStateForTest(t, cam.ID, "idle")
+
+	if !motionDetectionShouldRun(cam) {
+		t.Fatal("expected idle stream to allow motion detection")
+	}
+}
+
+func TestMotionDetectionShouldRunBlocksOfflineStream(t *testing.T) {
+	cam := constant.Camera{ID: "motion-offline-stream", Mode: "normal", MotionDetect: true}
+	setOverridesForTest(t, nil)
+	setStreamStateForTest(t, cam.ID, "offline")
+
+	if motionDetectionShouldRun(cam) {
+		t.Fatal("expected offline stream to block motion detection")
 	}
 }
 
@@ -193,4 +224,41 @@ func createTimeShiftTestSegment(t *testing.T, dir string, start time.Time) strin
 		t.Fatal(err)
 	}
 	return path
+}
+
+func setOverridesForTest(t *testing.T, values map[string]string) {
+	t.Helper()
+
+	overrideMux.Lock()
+	oldOverrides := overrides
+	overrides = make(map[string]string, len(values))
+	for camID, action := range values {
+		overrides[camID] = action
+	}
+	overrideMux.Unlock()
+
+	t.Cleanup(func() {
+		overrideMux.Lock()
+		overrides = oldOverrides
+		overrideMux.Unlock()
+	})
+}
+
+func setStreamStateForTest(t *testing.T, camID, state string) {
+	t.Helper()
+
+	service.StatusMux.Lock()
+	oldStatus, hadStatus := service.StatusMap[camID]
+	service.StatusMap[camID] = &service.CameraStatus{StreamState: state}
+	service.StatusMux.Unlock()
+
+	t.Cleanup(func() {
+		service.StatusMux.Lock()
+		if hadStatus {
+			service.StatusMap[camID] = oldStatus
+		} else {
+			delete(service.StatusMap, camID)
+		}
+		service.StatusMux.Unlock()
+	})
 }

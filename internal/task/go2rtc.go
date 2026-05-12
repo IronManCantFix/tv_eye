@@ -123,7 +123,7 @@ func InitGo2rtcStreams(config constant.Config) {
 	log.Println("警告：无法连接到 go2rtc，流初始化超时，请确保 go2rtc 已启动！")
 }
 
-// CleanupGo2rtcStreams 在程序退出前注销已注册的视频流
+// CleanupGo2rtcStreams 在配置热重启时注销旧配置注册的视频流。
 func CleanupGo2rtcStreams(config constant.Config) {
 	// 注意这里使用我们在上一步修改的 go2rtc 容器名地址
 	go2rtcHost := fmt.Sprintf("http://%s:%d", constant.DefaultGo2rtcHost, constant.DefaultGo2rtcApiPort)
