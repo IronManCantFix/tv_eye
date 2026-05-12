@@ -217,10 +217,12 @@ async function loadStatus() {
         list.innerHTML = '';
 
         Object.entries(data).forEach(([id, cam]) => {
-            const isRunning = cam.is_running;
+            const recordState = cam.record_state || (cam.is_running ? 'recording' : 'idle');
+            const isRunning = recordState === 'recording' || recordState === 'motion_detecting' || recordState === 'motion_recording';
             const isSelected = currentSelectedCam === id;
             const streamState = cam.stream_state || 'offline';
             let streamLight, streamText;
+            let recordLight, recordText, recordTextClass;
 
             if (streamState === 'online') {
                 streamLight = 'bg-green-500 shadow-[0_0_5px_#22c55e]';
@@ -233,6 +235,24 @@ async function loadStatus() {
                 streamText = '<span class="text-[10px] text-red-500 font-bold">流断线</span>';
             }
 
+            if (recordState === 'motion_recording') {
+                recordLight = 'bg-amber-500 shadow-[0_0_5px_#f59e0b] animate-pulse';
+                recordText = '动检录制中';
+                recordTextClass = 'text-amber-700';
+            } else if (recordState === 'motion_detecting') {
+                recordLight = 'bg-sky-500 shadow-[0_0_5px_#0ea5e9]';
+                recordText = '动检中';
+                recordTextClass = 'text-sky-700';
+            } else if (recordState === 'recording') {
+                recordLight = 'bg-red-500 shadow-[0_0_5px_#ef4444] animate-pulse';
+                recordText = '录制中';
+                recordTextClass = 'text-gray-700';
+            } else {
+                recordLight = 'bg-gray-300';
+                recordText = '未录像';
+                recordTextClass = 'text-gray-400';
+            }
+
             const item = document.createElement('div');
             item.className = `p-3 rounded-xl border cursor-pointer transition-all flex flex-col group ${isSelected ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-100' : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-sm'} ${isRunning ? '' : 'opacity-80'}`;
             item.onclick = () => selectCamera(id);
@@ -240,14 +260,14 @@ async function loadStatus() {
             item.innerHTML = `
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center">
-                        <div class="flex flex-col mr-3 space-y-1.5 border-r border-gray-100 pr-3 min-w-[65px]">
+                        <div class="flex flex-col mr-3 space-y-1.5 border-r border-gray-100 pr-3 min-w-[78px]">
                             <div class="flex items-center" title="摄像机实时流状态">
                                 <div class="w-2 h-2 rounded-full ${streamLight} mr-1.5 shrink-0"></div>
                                 ${streamText}
                             </div>
                             <div class="flex items-center" title="本地录制状态">
-                                <div class="w-2 h-2 rounded-full ${isRunning ? 'bg-red-500 shadow-[0_0_5px_#ef4444] animate-pulse' : 'bg-gray-300'} mr-1.5 shrink-0"></div>
-                                <span class="text-[10px] ${isRunning ? 'text-gray-700' : 'text-gray-400'} font-bold">${isRunning ? '录制中' : '未录像'}</span>
+                                <div class="w-2 h-2 rounded-full ${recordLight} mr-1.5 shrink-0"></div>
+                                <span class="text-[10px] ${recordTextClass} font-bold">${recordText}</span>
                             </div>
                         </div>
                         <div class="flex flex-col">
@@ -314,9 +334,15 @@ function renderGrid() {
 
     for (let i = 0; i < currentLayout; i++) {
         const isFocused = i === activeCell;
+        const cellFocusClass = currentLayout === 1
+            ? 'border-gray-800'
+            : (isFocused ? 'border-blue-500 shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]' : 'border-gray-800 hover:border-gray-600');
+        const liveIframeClass = currentLayout === 1
+            ? 'w-full h-full border-0 hidden'
+            : 'w-full h-full border-0 hidden pointer-events-none';
         const cellHtml = `
-            <div id="cell-${i}" onclick="setActiveCell(${i})" ondblclick="toggleCellFullscreen(${i})" class="relative w-full h-full bg-gray-900 border-[2px] transition-colors overflow-hidden group cursor-pointer ${isFocused ? 'border-blue-500 shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]' : 'border-gray-800 hover:border-gray-600'}">
-                <iframe id="live-iframe-${i}" class="w-full h-full border-0 hidden pointer-events-none" allow="autoplay; fullscreen; microphone; camera"></iframe>
+            <div id="cell-${i}" onclick="setActiveCell(${i})" ondblclick="toggleCellFullscreen(${i})" class="relative w-full h-full bg-gray-900 border-[2px] transition-colors overflow-hidden group cursor-pointer ${cellFocusClass}">
+                <iframe id="live-iframe-${i}" class="${liveIframeClass}" allow="autoplay; fullscreen; microphone; camera"></iframe>
                 <div id="dplayer-${i}" class="w-full h-full hidden"></div>
                 <video id="native-player-${i}" class="w-full h-full object-contain hidden bg-black" playsinline controls></video>
                 <div id="empty-state-${i}" class="absolute inset-0 flex flex-col items-center justify-center text-gray-700 pointer-events-none group-hover:text-gray-500 transition-colors">
@@ -403,7 +429,10 @@ function updateFocusUI() {
     for (let i = 0; i < currentLayout; i++) {
         const cell = document.getElementById(`cell-${i}`);
         if (cell) {
-            if (i === activeCell) {
+            if (currentLayout === 1) {
+                cell.classList.remove('border-blue-500', 'shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]', 'hover:border-gray-600');
+                cell.classList.add('border-gray-800');
+            } else if (i === activeCell) {
                 cell.classList.add('border-blue-500', 'shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]');
                 cell.classList.remove('border-gray-800');
             } else {
@@ -707,7 +736,7 @@ function executePlayInCell(index, source, isLive, title, forceNative = false, wa
         dplayerContainer.classList.add('hidden');
         nativePlayer.classList.add('hidden');
         liveIframe.classList.remove('hidden');
-        liveIframe.src = `/stream.html?src=${source}`;
+        liveIframe.src = `/stream.html?src=${encodeURIComponent(source)}`;
     } else {
         liveIframe.classList.add('hidden');
         liveIframe.src = '';

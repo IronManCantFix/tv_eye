@@ -285,7 +285,13 @@ func runMotionCameraTask(ctx context.Context, cam constant.Camera, camDir string
 				motionSession = nil
 			}
 
-			service.UpdateStatus(cam.ID, motionSession != nil, cam.Mode)
+			recordState := service.RecordStateIdle
+			if motionSession != nil {
+				recordState = service.RecordStateMotionRecording
+			} else if harvestCmd != nil {
+				recordState = service.RecordStateMotionDetecting
+			}
+			service.UpdateRecordState(cam.ID, recordState, cam.Mode)
 		}
 	}
 }
