@@ -6,6 +6,8 @@ let cellData = new Array(6).fill(null);
 let currentSelectedCam = null;
 let pendingAction = null;
 let compactGrid = window.innerWidth < 640;
+let selectedRecordRange = {start: '', end: ''};
+const maxRecordRangeDays = 7;
 const recordArchiveOpenDates = new Set();
 
 window.onload = function () {
@@ -13,6 +15,7 @@ window.onload = function () {
         alert("播放器组件加载失败，请检查网络！");
         return;
     }
+    initRecordRangeControls();
     setLayout(1);
     loadStatus();
     setInterval(loadStatus, 5000);
@@ -792,9 +795,143 @@ function resetEmptyState(index) {
 }
 
 // --- 历史录像逻辑 ---
+function initRecordRangeControls() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    startInput.addEventListener('change', syncRecordRangeLimits);
+    endInput.addEventListener('change', syncRecordRangeLimits);
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+}
+
+function syncRecordRangeLimits() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    const todayKey = formatDateKey(new Date());
+    startInput.removeAttribute('min');
+    endInput.removeAttribute('min');
+    startInput.max = todayKey;
+    endInput.max = todayKey;
+
+    const startDate = parseLocalDate(startInput.value);
+    const endDate = parseLocalDate(endInput.value);
+
+    if (startDate) {
+        endInput.min = startInput.value;
+        const maxEndKey = formatDateKey(addDays(startDate, maxRecordRangeDays - 1));
+        endInput.max = minDateKey(maxEndKey, todayKey);
+    }
+    if (endDate) {
+        const minStartKey = formatDateKey(addDays(endDate, -(maxRecordRangeDays - 1)));
+        startInput.min = minStartKey;
+        startInput.max = minDateKey(endInput.value, todayKey);
+    }
+}
+
+function applyRecordRange() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    const start = startInput.value;
+    const end = endInput.value;
+    const validationError = validateRecordRange(start, end);
+    if (validationError) {
+        alert(validationError);
+        return;
+    }
+
+    selectedRecordRange = {start, end};
+    recordArchiveOpenDates.clear();
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+    if (currentSelectedCam) {
+        loadRecords(currentSelectedCam);
+    } else {
+        alert('请先选择摄像头');
+    }
+}
+
+function resetRecordRange() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    selectedRecordRange = {start: '', end: ''};
+    recordArchiveOpenDates.clear();
+
+    if (startInput) startInput.value = '';
+    if (endInput) endInput.value = '';
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+
+    if (currentSelectedCam) {
+        loadRecords(currentSelectedCam);
+    }
+}
+
+function validateRecordRange(start, end) {
+    if (!start || !end) return '请选择起止日期';
+
+    const startDate = parseLocalDate(start);
+    const endDate = parseLocalDate(end);
+    if (!startDate || !endDate) return '日期格式有误';
+    if (endDate < startDate) return '结束日期不能早于开始日期';
+    if (recordRangeDaySpan(start, end) > maxRecordRangeDays) {
+        return `日期范围最多支持连续 ${maxRecordRangeDays} 天`;
+    }
+    return '';
+}
+
+function updateRecordRangeStatus() {
+    const status = document.getElementById('recordRangeStatus');
+    if (!status) return;
+    if (selectedRecordRange.start && selectedRecordRange.end) {
+        status.innerText = selectedRecordRange.start === selectedRecordRange.end
+            ? selectedRecordRange.start
+            : `${selectedRecordRange.start} 至 ${selectedRecordRange.end}`;
+    } else {
+        status.innerText = '最近7个录像日';
+    }
+}
+
+function buildRecordsUrl(camId) {
+    const params = new URLSearchParams();
+    if (selectedRecordRange.start && selectedRecordRange.end) {
+        params.set('start', selectedRecordRange.start);
+        params.set('end', selectedRecordRange.end);
+    }
+    const query = params.toString();
+    return `/api/records/${encodeURIComponent(camId)}${query ? `?${query}` : ''}`;
+}
+
+function addDays(date, days) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+}
+
+function minDateKey(a, b) {
+    return a <= b ? a : b;
+}
+
+function recordRangeDaySpan(start, end) {
+    const startUTC = dateKeyToUTC(start);
+    const endUTC = dateKeyToUTC(end);
+    return Math.floor((endUTC - startUTC) / 86400000) + 1;
+}
+
+function dateKeyToUTC(dateKey) {
+    const parts = dateKey.split('-').map(Number);
+    return Date.UTC(parts[0], parts[1] - 1, parts[2]);
+}
+
 async function loadRecords(camId) {
     const list = document.getElementById('recordList');
     const countBadge = document.getElementById('recordCount');
+    updateRecordRangeStatus();
     list.className = 'space-y-4';
     list.innerHTML = `
         <div class="rounded-xl border border-slate-200 bg-white px-5 py-10 text-center text-sm font-medium text-slate-400 shadow-sm">
@@ -803,12 +940,22 @@ async function loadRecords(camId) {
     `;
 
     try {
-        const resp = await fetch(`/api/records/${camId}`);
+        const resp = await fetch(buildRecordsUrl(camId));
+        if (!resp.ok) {
+            let message = '获取录像列表失败';
+            try {
+                const err = await resp.json();
+                if (err && err.error) message = err.error;
+            } catch (_) {
+            }
+            throw new Error(message);
+        }
         const files = await resp.json();
         list.innerHTML = '';
 
         if (!files || files.length === 0) {
             countBadge.innerText = '0 个文件';
+            const emptyTitle = selectedRecordRange.start && selectedRecordRange.end ? '该日期范围暂无录像' : '该设备暂无历史录像';
             list.innerHTML = `
                 <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-14 text-center">
                     <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-300 shadow-sm">
@@ -816,7 +963,7 @@ async function loadRecords(camId) {
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
                         </svg>
                     </div>
-                    <div class="text-sm font-bold text-slate-500">该设备暂无历史录像</div>
+                    <div class="text-sm font-bold text-slate-500">${emptyTitle}</div>
                 </div>
             `;
             return;
@@ -827,10 +974,11 @@ async function loadRecords(camId) {
         countBadge.innerText = `${files.length} 个文件 · ${formatRecordSize(totalBytes)}`;
 
         const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+        const hasOpenDate = sortedDates.some(date => recordArchiveOpenDates.has(`${camId}:${date}`));
         sortedDates.forEach((date, index) => {
             const entries = groups[date].sort((a, b) => b.meta.sortKey.localeCompare(a.meta.sortKey));
             const groupKey = `${camId}:${date}`;
-            const isOpen = recordArchiveOpenDates.has(groupKey) || (index === 0 && !recordArchiveOpenDates.size);
+            const isOpen = recordArchiveOpenDates.has(groupKey) || (index === 0 && !hasOpenDate);
             if (isOpen) recordArchiveOpenDates.add(groupKey);
 
             const groupDiv = document.createElement('div');
@@ -880,7 +1028,12 @@ async function loadRecords(camId) {
             list.appendChild(groupDiv);
         });
     } catch (e) {
-        list.innerHTML = '<div class="rounded-xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-bold text-red-400">获取录像列表失败</div>';
+        countBadge.innerText = '加载失败';
+        list.innerHTML = '';
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'rounded-xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-bold text-red-400';
+        errorDiv.textContent = e.message || '获取录像列表失败';
+        list.appendChild(errorDiv);
     }
 }
 
@@ -987,9 +1140,12 @@ function archiveDateSubTitle(date) {
 }
 
 function parseLocalDate(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
     const parts = date.split('-').map(Number);
     if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
-    return new Date(parts[0], parts[1] - 1, parts[2]);
+    const parsed = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (formatDateKey(parsed) !== date) return null;
+    return parsed;
 }
 
 function formatDateKey(date) {

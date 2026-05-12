@@ -194,10 +194,28 @@
         </div>
     </div>
 
-    <div class="bg-white p-6 rounded-xl shadow-sm border-t-4 border-emerald-500">
-        <div class="flex items-center justify-between mb-6">
-            <h2 class="font-bold text-lg text-gray-700">历史录像档案</h2>
-            <span id="recordCount" class="text-xs font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">0 个文件</span>
+    <div class="bg-white p-4 sm:p-6 rounded-xl shadow-sm border-t-4 border-emerald-500">
+        <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex flex-wrap items-center gap-2">
+                <h2 class="font-bold text-lg text-gray-700">历史录像档案</h2>
+                <span id="recordCount" class="text-xs font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full border border-gray-200">0 个文件</span>
+                <span id="recordRangeStatus" class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">最近7个录像日</span>
+            </div>
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 shadow-inner">
+                    <input id="recordStartDate" type="date" aria-label="录像开始日期" class="h-8 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-xs font-mono text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 sm:w-[142px]">
+                    <span class="text-xs font-bold text-slate-400">至</span>
+                    <input id="recordEndDate" type="date" aria-label="录像结束日期" class="h-8 min-w-0 rounded-md border border-slate-200 bg-white px-2 text-xs font-mono text-slate-700 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 sm:w-[142px]">
+                </div>
+                <div class="grid grid-cols-2 gap-2 sm:flex">
+                    <button id="recordRangeApplyBtn" onclick="applyRecordRange()" class="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-95">
+                        查询
+                    </button>
+                    <button onclick="resetRecordRange()" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-95">
+                        最近7个录像日
+                    </button>
+                </div>
+            </div>
         </div>
         <div id="recordList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"></div>
     </div>

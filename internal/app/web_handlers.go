@@ -10,8 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/r0n9/camkeep/constant"
@@ -27,12 +30,32 @@ type recordFile struct {
 	Path string `json:"path"` // 相对路径，用于删除文件
 }
 
+type recordEntry struct {
+	file    recordFile
+	date    time.Time
+	dateKey string
+}
+
+type recordDateRange struct {
+	start    time.Time
+	end      time.Time
+	explicit bool
+}
+
 type probeResult struct {
 	Codec     string `json:"codec"`
 	IsH265    bool   `json:"is_h265"`
 	CanProbe  bool   `json:"can_probe"`
 	ProbeNote string `json:"probe_note,omitempty"`
 }
+
+const (
+	recordDateLayout    = "2006-01-02"
+	maxRecordRangeDays  = 7
+	defaultRecordDayMax = 7
+)
+
+var recordDatePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
 func handleIndex(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
@@ -103,8 +126,13 @@ func cameraExists(camID string) bool {
 
 func handleRecords(c *gin.Context) {
 	camID := c.Param("id")
+	dateRange, err := parseRecordDateRange(c.Query("start"), c.Query("end"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-	var files []recordFile
+	var entries []recordEntry
 	baseDir := filepath.Join(constant.DefaultRecordBaseDir, camID)
 
 	filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
@@ -113,22 +141,160 @@ func handleRecords(c *gin.Context) {
 		}
 		if !d.IsDir() && (strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".mp4")) {
 			relPath, _ := filepath.Rel(constant.DefaultRecordBaseDir, path)
+			relPath = filepath.ToSlash(relPath)
+			recordDate, ok := parseRecordDateFromPath(relPath)
+			if !ok {
+				return nil
+			}
 
 			// 2. 读取并格式化文件大小
-			info, _ := d.Info()
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
 			sizeMB := float64(info.Size()) / (1024 * 1024)
 			sizeStr := fmt.Sprintf("%.1f MB", sizeMB)
 
-			files = append(files, recordFile{
-				Name: filepath.Base(path),
-				Url:  "/play/" + filepath.ToSlash(relPath),
-				Size: sizeStr,
-				Path: filepath.ToSlash(relPath),
+			entries = append(entries, recordEntry{
+				date:    recordDate,
+				dateKey: recordDate.Format(recordDateLayout),
+				file: recordFile{
+					Name: filepath.Base(path),
+					Url:  "/play/" + relPath,
+					Size: sizeStr,
+					Path: relPath,
+				},
 			})
 		}
 		return nil
 	})
-	c.JSON(200, files)
+	c.JSON(http.StatusOK, filterRecordEntries(entries, dateRange))
+}
+
+func parseRecordDateRange(startText, endText string) (recordDateRange, error) {
+	startText = strings.TrimSpace(startText)
+	endText = strings.TrimSpace(endText)
+	if startText == "" && endText == "" {
+		return recordDateRange{}, nil
+	}
+	if startText == "" || endText == "" {
+		return recordDateRange{}, fmt.Errorf("开始日期和结束日期必须同时提供")
+	}
+
+	start, err := parseRecordDate(startText)
+	if err != nil {
+		return recordDateRange{}, fmt.Errorf("开始日期格式有误")
+	}
+	end, err := parseRecordDate(endText)
+	if err != nil {
+		return recordDateRange{}, fmt.Errorf("结束日期格式有误")
+	}
+	if end.Before(start) {
+		return recordDateRange{}, fmt.Errorf("结束日期不能早于开始日期")
+	}
+	if recordDateSpanDays(start, end) > maxRecordRangeDays {
+		return recordDateRange{}, fmt.Errorf("日期范围最多支持连续 %d 天", maxRecordRangeDays)
+	}
+
+	return recordDateRange{
+		start:    start,
+		end:      end,
+		explicit: true,
+	}, nil
+}
+
+func recordDateSpanDays(start, end time.Time) int {
+	startUTC := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	endUTC := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+	return int(endUTC.Sub(startUTC)/(24*time.Hour)) + 1
+}
+
+func parseRecordDate(dateText string) (time.Time, error) {
+	parsed, err := time.ParseInLocation(recordDateLayout, dateText, time.Local)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if parsed.Format(recordDateLayout) != dateText {
+		return time.Time{}, fmt.Errorf("invalid date")
+	}
+	return parsed, nil
+}
+
+func parseRecordDateFromPath(relPath string) (time.Time, bool) {
+	pathParts := strings.Split(filepath.ToSlash(relPath), "/")
+	for _, part := range pathParts[1:] {
+		candidate := recordDatePattern.FindString(part)
+		if candidate != part {
+			continue
+		}
+		parsed, err := parseRecordDate(candidate)
+		if err == nil {
+			return parsed, true
+		}
+	}
+
+	for _, candidate := range recordDatePattern.FindAllString(relPath, -1) {
+		parsed, err := parseRecordDate(candidate)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func filterRecordEntries(entries []recordEntry, dateRange recordDateRange) []recordFile {
+	sortRecordEntries(entries)
+
+	var files []recordFile
+	if dateRange.explicit {
+		for _, entry := range entries {
+			if entry.date.Before(dateRange.start) || entry.date.After(dateRange.end) {
+				continue
+			}
+			files = append(files, entry.file)
+		}
+		return files
+	}
+
+	selectedDates := latestRecordDateKeys(entries, defaultRecordDayMax)
+	for _, entry := range entries {
+		if selectedDates[entry.dateKey] {
+			files = append(files, entry.file)
+		}
+	}
+	return files
+}
+
+func sortRecordEntries(entries []recordEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].date.Equal(entries[j].date) {
+			return entries[i].date.After(entries[j].date)
+		}
+		return entries[i].file.Name > entries[j].file.Name
+	})
+}
+
+func latestRecordDateKeys(entries []recordEntry, limit int) map[string]bool {
+	dateSet := make(map[string]bool)
+	for _, entry := range entries {
+		dateSet[entry.dateKey] = true
+	}
+
+	dates := make([]string, 0, len(dateSet))
+	for dateKey := range dateSet {
+		dates = append(dates, dateKey)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
+
+	if len(dates) > limit {
+		dates = dates[:limit]
+	}
+
+	selected := make(map[string]bool, len(dates))
+	for _, dateKey := range dates {
+		selected[dateKey] = true
+	}
+	return selected
 }
 
 func handleDeleteRecord(c *gin.Context) {
