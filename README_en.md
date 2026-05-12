@@ -17,24 +17,19 @@
 
 CamKeep is a streaming and recording gateway written in Go, deeply integrated with **go2rtc** and **FFmpeg**. Designed for home NAS (FnOS, Synology, QNAP, Unraid, etc.) and low-power micro-servers, it allows you to say goodbye to expensive proprietary NVRs and privacy risks.
 
-## 🔥 Key Highlights
+## ✨ Feature Highlights
 
-* 🐳 **All-in-One Simple Deployment**: Deeply integrated streaming engine. A **single Docker container** is all you need to launch the entire security system, no complex network or environment configuration required.
-* 🔒 **100% Local Operation**: **No public cloud! No cloud connection! No mandatory accounts!** Completely eliminate the risk of monitoring footage leakage. As long as your local network is up, your surveillance is secure.
-* 📹 **Break Brand Barriers (Records anything with RTSP)**: Whether it's a traditional security camera (Hikvision, Dahua, TP-Link), a flashed smart camera, or even an old smartphone—**as long as it outputs an RTSP stream, CamKeep can store it 24/7**.
-* ⚡  **Ultra-Low Resource Usage**: Specifically optimized for the generally weak CPUs of NAS devices using a "Stream Proxy" architecture. Even with multiple viewers, it only pulls **one stream** from the camera. Recording uses `Copy` mode by default (zero re-encoding), making it extremely friendly to low-power devices.
-* 🔄 **Seamless go2rtc Integration**: Versions v1.3.0+ support automatic scanning and management of external video streams running on the underlying go2rtc. Synchronize your existing smart home streams with just one click, without redundant configurations.
-* 🖥️ **Professional Multi-Grid Matrix**: Say goodbye to single-screen switching. Features a professional-grade **4/6-grid playback matrix** with double-click fullscreen, smart focus switching, and background idle sleep mechanisms for an immersive monitoring experience.
-* 🏗️ **Multi-Arch Compatibility**: Native support for x86-64 and ARM64 (Raspberry Pi, Rockchip, etc.), perfectly suited for professional servers, home NAS, and low-power edge devices.
+CamKeep has one clear goal: keep RTSP cameras recording reliably to your own NAS, inside your local network, with minimal setup and low resource usage.
 
-## 🌟 More Features
-
-* **Low Latency & Universal Live Viewing**: Front-end prioritizes native WebRTC for millisecond-level real-time video, avoiding the multi-second delay of traditional HLS. Built-in **intelligent protocol fallback (MSE / mpegts)** ensures smooth viewing even in strict firewall environments or restricted browsers.
-* **Smart Recording & Storage Management**:
-  * Native support for **MPEG-TS (.ts)** segments. Recording remains intact even after power failures, allowing for instant playback.
-  * Built-in **Timelapse** mode: Condense long footage into high-speed videos to save massive NAS disk space.
-  * **Automatic Storage Manager**: Configure `retention_days` and the system will automatically recycle expired files in the background.
-* **Modern Control Panel**: Clean Web UI with real-time status monitoring. Built-in DPlayer + mpegts.js for waterfall-style playback by date.
+* 🐳 **Simple single-container deployment**: go2rtc and FFmpeg are bundled in one Docker image. Start it, mount config and records, then manage updates from the Web UI.
+* 🔒 **Private local-network operation**: No cloud dependency, no required account, no public service required. Streams, recordings, and playback stay on your LAN and NAS.
+* ⚡ **Low-power friendly**: go2rtc acts as a stream proxy, so multiple viewers can share one upstream camera connection. Normal recording uses `copy` by default to avoid unnecessary re-encoding.
+* 📹 **Works with any RTSP source**: Hikvision, Dahua, TP-Link, flashed smart cameras, old phones, and existing go2rtc streams can all be brought into CamKeep.
+* 🎥 **Practical recording modes**: Scheduled recording, manual start/stop, motion recording, timelapse, TS/MP4 segments, date-based playback, and historical clip browsing.
+* 🧠 **Efficient motion recording**: Motion detection uses low-resolution frame differencing with a Time-Shift buffer, creating event clips only when the scene changes.
+* 🧹 **Automatic retention**: Set `retention_days` and CamKeep will clean expired recordings in the background, making it suitable for long-running NAS deployments.
+* 🖥️ **Useful monitoring dashboard**: Low-latency WebRTC live view with MSE / mpegts fallback, 4/6-grid preview, double-click fullscreen, device status, and date-based playback.
+* 🏗️ **Built for NAS and edge devices**: Native x86-64 and ARM64 images for Synology, QNAP, Unraid, FnOS, Raspberry Pi, RK3588, and similar low-power systems.
 
 ---
 
@@ -133,4 +128,3 @@ This project uses:
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=r0n9/camkeep&type=date&legend=top-left" />
  </picture>
 </a>
-```
