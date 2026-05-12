@@ -27,6 +27,7 @@ func startWebServer() {
 	r.POST("/api/camera/:id/:action", handleCameraAction)
 	r.GET("/api/records/:id", handleRecords)
 	r.GET("/api/record/probe", handleProbeRecord)
+	r.GET("/api/record/download", handleDownloadRecord)
 	r.DELETE("/api/record", handleDeleteRecord)
 	r.GET("/api/go2rtc/unmanaged", handleUnmanagedStreams)
 

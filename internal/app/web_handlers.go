@@ -146,6 +146,21 @@ func handleDeleteRecord(c *gin.Context) {
 	c.JSON(200, gin.H{"msg": "录像删除成功"})
 }
 
+func handleDownloadRecord(c *gin.Context) {
+	fullPath, ok := safeRecordPath(c)
+	if !ok {
+		c.JSON(400, gin.H{"error": "非法的路径参数"})
+		return
+	}
+
+	if _, err := os.Stat(fullPath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "录像文件不存在"})
+		return
+	}
+
+	c.FileAttachment(fullPath, filepath.Base(fullPath))
+}
+
 func handleProbeRecord(c *gin.Context) {
 	fullPath, ok := safeRecordPath(c)
 	if !ok {

@@ -6,6 +6,7 @@ let cellData = new Array(6).fill(null);
 let currentSelectedCam = null;
 let pendingAction = null;
 let compactGrid = window.innerWidth < 640;
+const recordArchiveOpenDates = new Set();
 
 window.onload = function () {
     if (typeof DPlayer === 'undefined') {
@@ -794,7 +795,12 @@ function resetEmptyState(index) {
 async function loadRecords(camId) {
     const list = document.getElementById('recordList');
     const countBadge = document.getElementById('recordCount');
-    list.innerHTML = '<div class="col-span-full text-center py-10 text-gray-400">检索中...</div>';
+    list.className = 'space-y-4';
+    list.innerHTML = `
+        <div class="rounded-xl border border-slate-200 bg-white px-5 py-10 text-center text-sm font-medium text-slate-400 shadow-sm">
+            正在检索历史录像...
+        </div>
+    `;
 
     try {
         const resp = await fetch(`/api/records/${camId}`);
@@ -803,77 +809,221 @@ async function loadRecords(camId) {
 
         if (!files || files.length === 0) {
             countBadge.innerText = '0 个文件';
-            list.innerHTML = '<div class="col-span-full text-center py-12 text-gray-400">该设备暂无历史录像</div>';
+            list.innerHTML = `
+                <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-14 text-center">
+                    <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-300 shadow-sm">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                        </svg>
+                    </div>
+                    <div class="text-sm font-bold text-slate-500">该设备暂无历史录像</div>
+                </div>
+            `;
             return;
         }
 
-        countBadge.innerText = `${files.length} 个文件`;
-        const groups = {};
-        files.forEach(file => {
-            const match = file.name.match(/\d{4}-\d{2}-\d{2}/);
-            const dateStr = match ? match[0] : '其他归档';
-            if (!groups[dateStr]) groups[dateStr] = [];
-            groups[dateStr].push(file);
-        });
+        const groups = groupRecordsByDate(files);
+        const totalBytes = files.reduce((sum, file) => sum + parseRecordSizeBytes(file.size), 0);
+        countBadge.innerText = `${files.length} 个文件 · ${formatRecordSize(totalBytes)}`;
 
         const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
         sortedDates.forEach((date, index) => {
-            const dateFiles = groups[date];
-            dateFiles.sort((a, b) => b.name.localeCompare(a.name));
-            const groupId = `date-${index}`;
-            const isFirst = index === 0;
-            const groupDiv = document.createElement('div');
-            groupDiv.className = 'flex flex-col bg-gray-50 border border-gray-200 rounded-xl overflow-hidden shadow-sm';
+            const entries = groups[date].sort((a, b) => b.meta.sortKey.localeCompare(a.meta.sortKey));
+            const groupKey = `${camId}:${date}`;
+            const isOpen = recordArchiveOpenDates.has(groupKey) || (index === 0 && !recordArchiveOpenDates.size);
+            if (isOpen) recordArchiveOpenDates.add(groupKey);
 
-            const header = document.createElement('div');
-            header.className = 'flex justify-between items-center p-3.5 bg-white border-b border-gray-200 cursor-pointer hover:bg-blue-50 transition-colors select-none';
-            header.onclick = () => {
-                document.getElementById(`content-${groupId}`).classList.toggle('hidden');
-                document.getElementById(`icon-${groupId}`).classList.toggle('rotate-90');
-            };
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md';
+
+            const header = document.createElement('button');
+            header.type = 'button';
+            header.className = 'flex w-full items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5 text-left transition-colors hover:bg-slate-50';
+
+            const dateBytes = entries.reduce((sum, entry) => sum + parseRecordSizeBytes(entry.file.size), 0);
             header.innerHTML = `
-                <div class="flex items-center">
-                    <span class="text-sm font-bold text-gray-700">${date}</span>
-                    <span class="ml-2 text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">${dateFiles.length}</span>
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-sm font-extrabold tracking-tight text-slate-800">${archiveDateTitle(date)}</span>
+                        <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600 ring-1 ring-blue-100">${entries.length} 段</span>
+                    </div>
+                    <div class="mt-1 text-[11px] font-medium text-slate-400">${archiveDateSubTitle(date)} · ${formatRecordSize(dateBytes)}</div>
                 </div>
-                <svg id="icon-${groupId}" class="w-4 h-4 text-gray-400 transition-transform ${isFirst ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                <svg class="h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
             `;
 
             const content = document.createElement('div');
-            content.id = `content-${groupId}`;
-            content.className = `flex flex-col space-y-1 p-2 max-h-[300px] overflow-y-auto custom-scrollbar ${isFirst ? '' : 'hidden'}`;
+            content.className = `${isOpen ? '' : 'hidden'} max-h-[420px] overflow-y-auto bg-slate-50/60 p-2.5 custom-scrollbar sm:max-h-[520px]`;
 
-            dateFiles.forEach(file => {
-                const timeMatch = file.name.match(/\d{2}-\d{2}-\d{2}\.(ts|mp4)$/);
-                let timeDisplay = timeMatch ? timeMatch[0].replace(/\.(ts|mp4)$/, '').replace(/-/g, ':') : file.name;
-                const ext = file.name.split('.').pop().toUpperCase();
-                const item = document.createElement('div');
-                item.className = 'flex justify-between items-center p-2.5 text-xs rounded-lg bg-white border border-gray-100 hover:border-blue-400 hover:text-blue-600 cursor-pointer transition-all shadow-sm group';
-                item.onclick = () => {
-                    playRecord(file, `🎬 回放: ${camId} (${timeDisplay})`);
-                };
-                item.innerHTML = `
-                <div class="flex items-center">
-                    <span class="mr-2">🎬</span>
-                    <span class="font-mono font-bold">${timeDisplay}</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-[10px] text-gray-400 font-mono">${file.size}</span>
-                    <span class="text-[9px] px-1 bg-gray-50 text-gray-400 rounded border border-gray-100 font-bold">${ext}</span>
-                    <button onclick="deleteRecord(event, '${camId}', '${file.path}')" class="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity px-1" title="永久删除该录像">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                </div>
-            `;
-                content.appendChild(item);
+            const fileGrid = document.createElement('div');
+            fileGrid.className = 'grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3';
+
+            entries.forEach(entry => {
+                fileGrid.appendChild(createRecordItem(camId, entry.file, entry.meta));
             });
+
+            content.appendChild(fileGrid);
+            header.onclick = () => {
+                const nextOpen = content.classList.toggle('hidden') === false;
+                header.querySelector('svg').classList.toggle('rotate-90', nextOpen);
+                if (nextOpen) {
+                    recordArchiveOpenDates.add(groupKey);
+                } else {
+                    recordArchiveOpenDates.delete(groupKey);
+                }
+            };
+
             groupDiv.appendChild(header);
             groupDiv.appendChild(content);
             list.appendChild(groupDiv);
         });
     } catch (e) {
-        list.innerHTML = '<div class="col-span-full text-center py-10 text-red-400">获取录像列表失败</div>';
+        list.innerHTML = '<div class="rounded-xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-bold text-red-400">获取录像列表失败</div>';
     }
+}
+
+function groupRecordsByDate(files) {
+    return files.reduce((groups, file) => {
+        const meta = parseRecordMeta(file);
+        if (!groups[meta.date]) groups[meta.date] = [];
+        groups[meta.date].push({file, meta});
+        return groups;
+    }, {});
+}
+
+function parseRecordMeta(file) {
+    const name = file.name || '';
+    const path = file.path || name;
+    const dateMatch = path.match(/\d{4}-\d{2}-\d{2}/);
+    const date = dateMatch ? dateMatch[0] : '其他归档';
+    const compactTimeMatch = name.match(/_(\d{2})(\d{2})(\d{2})(?:_|\.|$)/);
+    const dashedTimeMatch = name.match(/_(\d{2})-(\d{2})-(\d{2})(?:_|\.|$)/);
+    const timeParts = compactTimeMatch || dashedTimeMatch;
+    const timeDisplay = timeParts ? `${timeParts[1]}:${timeParts[2]}:${timeParts[3]}` : '整段录像';
+    const sortKey = timeParts ? `${timeParts[1]}${timeParts[2]}${timeParts[3]}_${name}` : name;
+    const ext = (name.split('.').pop() || '').toUpperCase();
+    const isMotion = /_motion\./i.test(name);
+    const isMerged = /_merged\./i.test(name);
+    const kind = isMotion ? '动检' : isMerged ? '合并' : '切片';
+    const kindClass = isMotion
+        ? 'bg-amber-50 text-amber-700 ring-amber-100'
+        : isMerged
+            ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+            : 'bg-slate-100 text-slate-500 ring-slate-200';
+    const iconClass = isMotion
+        ? 'bg-amber-50 text-amber-600 ring-amber-100'
+        : isMerged
+            ? 'bg-emerald-50 text-emerald-600 ring-emerald-100'
+            : 'bg-blue-50 text-blue-600 ring-blue-100';
+
+    return {date, timeDisplay, sortKey, ext, kind, kindClass, iconClass};
+}
+
+function createRecordItem(camId, file, meta) {
+    const item = document.createElement('div');
+    item.className = 'group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md active:translate-y-0';
+    item.onclick = () => playRecord(file, `回放: ${camId} (${meta.timeDisplay})`);
+
+    item.innerHTML = `
+        <div class="flex min-w-0 items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1 shadow-sm ${meta.iconClass}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 3.75h7.25L19 8.5V18.5A1.75 1.75 0 0117.25 20.25H7A1.75 1.75 0 015.25 18.5v-13A1.75 1.75 0 017 3.75z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14.25 3.75V8.5H19"></path>
+                    <path fill="currentColor" stroke="none" d="M10.25 11.05a.55.55 0 01.83-.47l3.35 2.02a.55.55 0 010 .94l-3.35 2.02a.55.55 0 01-.83-.47v-4.04z"></path>
+                </svg>
+            </div>
+            <div class="min-w-0">
+                <div class="font-mono text-sm font-extrabold leading-5 text-slate-800">${meta.timeDisplay}</div>
+                <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${meta.kindClass}">${meta.kind}</span>
+                    <span class="font-mono text-[10px] font-medium text-slate-400">${meta.ext}</span>
+                    <span class="font-mono text-[10px] font-medium text-slate-400">${file.size}</span>
+                </div>
+            </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+            <button data-record-action="download" class="rounded-md p-2 text-slate-300 transition-colors hover:bg-blue-50 hover:text-blue-600" title="下载该录像">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M8 12l4 4m0 0l4-4m-4 4V4"></path>
+                </svg>
+            </button>
+            <button data-record-action="delete" class="rounded-md p-2 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500" title="永久删除该录像">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                </svg>
+            </button>
+        </div>
+    `;
+
+    const downloadBtn = item.querySelector('[data-record-action="download"]');
+    const deleteBtn = item.querySelector('[data-record-action="delete"]');
+    downloadBtn.onclick = (event) => downloadRecord(event, file.path);
+    deleteBtn.onclick = (event) => deleteRecord(event, camId, file.path);
+    return item;
+}
+
+function archiveDateTitle(date) {
+    if (date === '其他归档') return date;
+    const today = new Date();
+    const current = parseLocalDate(date);
+    if (!current) return date;
+    const todayKey = formatDateKey(today);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date === todayKey) return `${date} · 今天`;
+    if (date === formatDateKey(yesterday)) return `${date} · 昨天`;
+    return date;
+}
+
+function archiveDateSubTitle(date) {
+    if (date === '其他归档') return '未识别日期';
+    const current = parseLocalDate(date);
+    if (!current) return '录像归档';
+    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    return weekdays[current.getDay()];
+}
+
+function parseLocalDate(date) {
+    const parts = date.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function formatDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function parseRecordSizeBytes(sizeText) {
+    const match = String(sizeText || '').match(/([\d.]+)\s*(KB|MB|GB)/i);
+    if (!match) return 0;
+    const value = Number(match[1]);
+    const unit = match[2].toUpperCase();
+    if (Number.isNaN(value)) return 0;
+    if (unit === 'GB') return value * 1024 * 1024 * 1024;
+    if (unit === 'MB') return value * 1024 * 1024;
+    return value * 1024;
+}
+
+function formatRecordSize(bytes) {
+    if (!bytes) return '0 MB';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function downloadRecord(e, filePath) {
+    e.stopPropagation();
+    const link = document.createElement('a');
+    link.href = `/api/record/download?path=${encodeURIComponent(filePath)}`;
+    link.download = filePath.split('/').pop() || 'record';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
 }
 
 async function deleteRecord(e, camId, filePath) {
