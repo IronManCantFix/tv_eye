@@ -129,10 +129,10 @@ func mergeCameraDate(ctx context.Context, cam constant.Camera, date string) erro
 		"-safe", "0",
 		"-i", listPath,
 		"-c:v", "copy", // 视频无损极速拼接 (占用极低 CPU)
-		"-tag:v", "hvc1", // 给 H.265 打上苹果能识别的标签，防止 Safari/iOS 黑屏
 		"-c:a", "aac", // 监控音频多为 alaw/ulaw(G.711)，必须转码为 AAC，否则浏览器没声音
 		"-movflags", "+faststart", // 将 moov atom 移到文件头部，完美支持超大文件的 HTTP Range 拖拽秒播
 	}
+	args = appendCodecSpecificMP4Tag(ctx, args, fragments)
 	args = append(args, tempOutput)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)

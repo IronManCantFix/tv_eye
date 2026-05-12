@@ -15,7 +15,8 @@ cameras:
     min_size_kb: 1024
     record_time: "00:00-23:59"
     mode: "normal"
-    capture_interval: 5
+    motion_detect: false
+    motionDetectRatioThreshold: 0.01
   - id: "cam_02"
     rtsp_url: "rtsp://admin:password@192.168.1.100:554/live"
     retention_days: 7
@@ -88,3 +89,11 @@ cameras:
 * **推荐值**：
     * `"5"`（每 5 秒拍 1 张）：适合人流量浓缩、天空云彩变化。
     * `"60"`（每 1 分钟拍 1 张）：适合几个月周期的工地施工记录、植物生长记录。
+
+#### 10. `motion_detect` (动检录制)
+* **作用**：**仅在 `mode: "normal"` 时生效**。开启后普通录制不再按时间段持续落盘，而是在录制时间段内检测到画面变化时启动事件录像；画面连续约 10 秒无变化后停止。
+* **默认值**：`false`。`mode: "timelapse"` 会忽略此项。
+
+#### 11. `motionDetectRatioThreshold` (动检阈值)
+* **作用**：**仅在 `motion_detect: true` 且 `mode: "normal"` 时生效**。表示低分辨率检测帧中变化像素占比超过多少时判定为运动。
+* **默认值**：`0.01`（约 1%）。数值越小越敏感，越大越不敏感。

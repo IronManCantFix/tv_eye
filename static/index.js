@@ -35,8 +35,8 @@ function confirmCamAction(camId, action) {
     if (action === 'start') {
         titleEl.innerText = `强制开启录像 (CAM-${camId})`;
         descEl.innerHTML = `
-            <p class="mb-2">此操作将<b>无视配置中的时间表</b>，立刻开始录像。</p>
-            <p class="mb-2">摄像头将<b>一直保持录制状态</b>，直到您手动点击“停录”或恢复“计划”。</p>
+            <p class="mb-2">此操作将<b>无视配置中的时间表</b>，立刻启用该摄像头的录制策略。</p>
+            <p class="mb-2">系统仍会按照配置执行普通持续录制、动检录制或延时录像，直到您手动点击“停录”或恢复“计划”。</p>
             <p class="text-xs text-green-600 font-bold mt-3 border-t pt-2">⚡ 确认后稍后即生效</p>`;
         btnEl.className = "px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold shadow transition-all";
         btnEl.innerText = "确认强录";
@@ -56,7 +56,7 @@ function confirmCamAction(camId, action) {
         titleEl.innerText = `恢复自动计划 (CAM-${camId})`;
         descEl.innerHTML = `
             <p class="mb-2">解除强制状态，将摄像头的录像控制权交还给系统。</p>
-            <p class="mb-2">系统将严格按照 conf.yaml 中的 <code>record_time</code> 时间表自动启停录像。</p>
+            <p class="mb-2">系统将严格按照 conf.yaml 中的 <code>record_time</code> 时间表和该摄像头录制模式自动启停录像。</p>
             <p class="text-xs text-blue-500 font-bold mt-3 border-t pt-2">⚡ 确认后立即应用计划逻辑</p>`;
         btnEl.className = "px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow transition-all";
         btnEl.innerText = "恢复计划";
@@ -185,7 +185,7 @@ function appendStreamToConfig(streamId) {
         propIndent = listIndent + "  ";
     }
 
-    const newCamYaml = [`${listIndent}- id: "${streamId}"`, `${propIndent}rtsp_url: "managed_by_go2rtc"`, `${propIndent}auto_discovered: true`, `${propIndent}retention_days: 7`, `${propIndent}segment_duration: 600`, `${propIndent}format: ts`, `${propIndent}min_size_kb: 1024`, `${propIndent}record_time: "00:00-23:59"`, `${propIndent}mode: normal`].join('\n') + '\n';
+    const newCamYaml = [`${listIndent}- id: "${streamId}"`, `${propIndent}rtsp_url: "managed_by_go2rtc"`, `${propIndent}auto_discovered: true`, `${propIndent}retention_days: 7`, `${propIndent}segment_duration: 600`, `${propIndent}format: ts`, `${propIndent}min_size_kb: 1024`, `${propIndent}record_time: "00:00-23:59"`, `${propIndent}mode: normal`, `${propIndent}motion_detect: false`, `${propIndent}motionDetectRatioThreshold: 0.01`].join('\n') + '\n';
 
     if (content.trim() === '') {
         content = 'cameras:\n';

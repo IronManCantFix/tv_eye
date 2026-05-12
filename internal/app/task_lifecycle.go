@@ -28,6 +28,11 @@ func startTasks() {
 	for _, cam := range cams {
 		taskWg.Add(1)
 		go task.CameraTask(ctx, &taskWg, cam)
+
+		if cam.MotionDetect && (cam.Mode == "" || cam.Mode == "normal") {
+			taskWg.Add(1)
+			go task.MotionDetectTask(ctx, &taskWg, cam)
+		}
 	}
 }
 

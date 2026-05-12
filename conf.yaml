@@ -8,6 +8,8 @@ cameras:
     min_size_kb: 1024       # 小于1MB自动删除
     record_time: "00:00-23:59" # 录制区间
     mode: "normal"            # 普通录制模式: "normal" 或 "timelapse"，留空默认为 normal
+    motion_detect: true        # 开启动检录制，仅 normal 模式生效；默认 false
+    motionDetectRatioThreshold: 0.01 # 动检变化像素比例阈值，0.01 表示 1%
 
 # 延时录像模式 mode=timelapse，间隔抓拍，能够极大地节省存储，但是比普通模式CPU消耗高
   - id: "摄像头2"
