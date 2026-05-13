@@ -2,16 +2,19 @@
 
 ## Summary
 
-Add a built-in TV watching time monitor to CamKeep. Use gocv to capture frames from RTSP streams, analyze the ROI region (TV screen) via brightness/frame-diff pixel analysis, track continuous and daily viewing time, and trigger Home Assistant actions (TTS + turn off TV) when thresholds are exceeded.
+Add a built-in TV watching time monitor to CamKeep. Use gocv to capture frames from RTSP streams, analyze the ROI region (TV screen) via brightness/frame-diff pixel analysis, enforce viewing time limits (per-session + rest interval + daily total), and trigger Home Assistant actions (TTS + turn off TV) when limits are exceeded.
 
 ## Requirements
 
 - Detect whether the TV screen is on (has content) using ROI pixel analysis
 - Support auto-calibration of the TV screen ROI region (Canny edge detection for largest rectangle)
 - Fallback to manual ROI configuration if auto-calibration fails
-- Track two metrics per monitor: single-session continuous time and daily cumulative time
+- Enforce three viewing rules:
+  - **Session limit**: max continuous viewing time per session (e.g., 5 min)
+  - **Rest interval**: mandatory rest period after each session (e.g., 20 min), TV turned off if opened during rest
+  - **Daily limit**: max total viewing time per day (e.g., 60 min)
 - Only monitor within a configurable time range (e.g., 08:00-23:00)
-- Trigger HA REST API actions when either threshold is exceeded
+- Trigger HA REST API actions: TTS announcement + turn off TV
 - Support enable/disable per monitor in config
 - Follow existing hot-restart lifecycle (shared context, WaitGroup)
 
@@ -32,14 +35,14 @@ tv_monitors:
     check_interval: 30        # frame capture interval (seconds)
     brightness_threshold: 30  # mean brightness below this = TV off
     frame_diff_threshold: 5.0 # std dev diff between frames below this = static screen
-    max_session_minutes: 45   # max continuous viewing time
-    max_daily_minutes: 120    # max daily total viewing time
-    cooldown_minutes: 30      # cooldown after triggering before re-triggering
+    max_session_minutes: 5    # single session max viewing time (minutes)
+    rest_minutes: 20          # mandatory rest between sessions (minutes)
+    max_daily_minutes: 60     # daily total max viewing time (minutes)
     ha_url: "http://homeassistant.local:8123"
     ha_token: "eyJhbGci..."
     ha_service: "media_player.turn_off"
     ha_entity_id: "media_player.xiao_ai"
-    ha_message: "看电视时间太长了，休息一下眼睛吧"  # optional TTS message
+    ha_message: "看电视时间到了，休息一下吧"  # optional TTS before turning off
 ```
 
 ## Detection Algorithm
@@ -69,30 +72,70 @@ If calibration fails (TV off, no clear rectangle), log a warning and require man
 
 ## State Machine
 
-Each monitor has an independent state machine:
+Each monitor has an independent state machine with 4 states:
 
 ```
-States: OFF → ON → TRIGGERED → COOLDOWN → OFF
+IDLE ──(TV ON)──► WATCHING ──(session ≥ max_session OR daily ≥ max_daily)──► TURNING_OFF
+  ▲                    │                                                        │
+  │                    │(TV OFF)                                                │
+  │                    ▼                                                        │
+  │                 IDLE                                                        ▼
+  │                                                              RESTING ──(rest elapsed)──► IDLE
+  │                                                                │
+  └──(rest elapsed & daily < max_daily)                           │
+                                                                   │(TV ON during rest)
+                                                                   ▼
+                                                              TURNING_OFF (immediate)
 ```
 
-- **OFF**: TV detected as off. Reset session timer.
-- **ON**: TV detected as on. Accumulate session time and daily time.
-- **TRIGGERED**: Threshold exceeded. Call HA API once. Record trigger timestamp.
-- **COOLDOWN**: Post-trigger cooldown period. Continue tracking but don't re-trigger.
+### State Descriptions
+
+- **IDLE**: TV is off (or not monitored). Waiting for TV to turn on. No timers running.
+- **WATCHING**: TV is on. Accumulating session time and daily time.
+  - If `sessionMinutes >= max_session_minutes` → TTS + turn off TV → transition to RESTING
+  - If `dailyMinutes >= max_daily_minutes` → TTS + turn off TV → transition to RESTING (rest doesn't matter, daily limit locks out for the day)
+  - If TV goes off naturally → reset session timer, transition to IDLE
+- **RESTING**: Mandatory rest period after a session ended by the monitor.
+  - If TV turns on during rest → immediately turn off TV (no TTS, or short warning)
+  - When `restMinutes >= rest_minutes` AND `dailyMinutes < max_daily_minutes` → transition to IDLE (ready for next session, but does NOT turn TV on)
+  - When `dailyMinutes >= max_daily_minutes` → stay in RESTING until next day reset (daily limit exhausted)
+- **TURNING_OFF**: Transient state while calling HA API. Immediately transitions to RESTING after HA call completes.
 
 ### Time Tracking
 
-- `sessionStart time.Time` — when current ON session began
-- `sessionMinutes float64` — accumulated continuous ON minutes
-- `dailyMinutes float64` — accumulated total ON minutes today
-- `lastDate string` — for daily reset detection (reset dailyMinutes when date changes)
-- `lastTrigger time.Time` — last HA trigger timestamp
+```go
+sessionStart  time.Time  // when current WATCHING session began
+dailyMinutes  float64    // total ON minutes today (accumulated across all sessions)
+lastDate      string     // for daily reset at midnight
+restStart     time.Time  // when current RESTING period began
+dailyLocked   bool       // true when dailyMinutes >= max_daily_minutes
+```
 
-Every `check_interval` seconds, if state is ON:
-- `dailyMinutes += checkInterval / 60.0`
-- `sessionMinutes = time.Since(sessionStart).Minutes()`
+Every `check_interval` seconds:
+- If state is WATCHING:
+  - `sessionMinutes = time.Since(sessionStart).Minutes()`
+  - `dailyMinutes += checkInterval / 60.0`
+- If state is RESTING:
+  - `restMinutes = time.Since(restStart).Minutes()`
+- At midnight (date change): reset `dailyMinutes = 0`, `dailyLocked = false`, transition to IDLE if resting
 
-Trigger when `sessionMinutes >= maxSessionMinutes` OR `dailyMinutes >= maxDailyMinutes`.
+### Example Timeline (max_session=5min, rest=20min, max_daily=60min)
+
+```
+08:00  IDLE — TV off
+10:00  TV turned on → WATCHING
+10:05  Session hit 5min → TTS → turn off → RESTING (restStart = 10:05)
+10:10  TV turned on during rest → immediately turn off → still RESTING
+10:25  Rest elapsed (20min) → IDLE (ready, won't auto-open TV)
+10:30  TV turned on → WATCHING
+10:35  Session hit 5min → TTS → turn off → RESTING
+10:55  Rest elapsed → IDLE
+... (repeats)
+11:55  Daily total reaches 60min → TTS → turn off → RESTING (dailyLocked=true)
+       Rest elapsed but dailyLocked → stays RESTING
+       Any TV on → immediately turn off
+00:00  Daily reset → IDLE
+```
 
 ## Home Assistant Integration
 
@@ -108,7 +151,7 @@ Content-Type: application/json
 
 Where `ha_service` like `media_player.turn_off` is split into domain=`media_player` and service=`turn_off`.
 
-### TTS Announcement (if ha_message is set)
+### TTS Announcement (if ha_message is set, before turning off)
 
 ```
 POST {ha_url}/api/services/tts/google_translate_say
@@ -119,6 +162,8 @@ Content-Type: application/json
 ```
 
 TTS is called first, then wait 5 seconds before calling the turn-off action.
+
+During rest period violations (TV turned on during rest), a shorter warning message is sent: "休息时间还没到哦，再等一下" + immediate turn off.
 
 ## Code Structure
 
@@ -149,8 +194,8 @@ type TVMonitorConfig struct {
     BrightnessThreshold  float64 `yaml:"brightness_threshold"`
     FrameDiffThreshold   float64 `yaml:"frame_diff_threshold"`
     MaxSessionMinutes    float64 `yaml:"max_session_minutes"`
+    RestMinutes          float64 `yaml:"rest_minutes"`
     MaxDailyMinutes      float64 `yaml:"max_daily_minutes"`
-    CooldownMinutes      float64 `yaml:"cooldown_minutes"`
     HAURL                string  `yaml:"ha_url"`
     HAToken              string  `yaml:"ha_token"`
     HAService            string  `yaml:"ha_service"`
@@ -161,15 +206,24 @@ type TVMonitorConfig struct {
 
 ```go
 // internal/tvmonitor/monitor.go
+type MonitorState int
+
+const (
+    StateIdle MonitorState = iota
+    StateWatching
+    StateTurningOff
+    StateResting
+)
+
 type TVMonitor struct {
-    config     TVMonitorConfig
-    rtspURL    string
-    state      MonitorState  // OFF, ON, TRIGGERED, COOLDOWN
-    sessionStart time.Time
-    sessionMinutes float64
+    config         TVMonitorConfig
+    rtspURL        string
+    state          MonitorState
+    sessionStart   time.Time
     dailyMinutes   float64
     lastDate       string
-    lastTrigger    time.Time
+    restStart      time.Time
+    dailyLocked    bool
     prevGray       gocv.Mat
     mu             sync.Mutex
 }
@@ -194,10 +248,15 @@ All detection events, state transitions, and HA API calls are logged via the sta
 Log examples:
 ```
 [tvmonitor:摄像头1] TV detected ON (brightness=128.5, diff=15.2)
-[tvmonitor:摄像头1] Session time: 45.5min exceeded threshold 45min, triggering HA action
-[tvmonitor:摄像头1] TTS sent: "看电视时间太长了"
+[tvmonitor:摄像头1] State: IDLE → WATCHING
+[tvmonitor:摄像头1] Session 5.2min exceeded limit 5min, turning off TV
+[tvmonitor:摄像头1] TTS sent: "看电视时间到了，休息一下吧"
 [tvmonitor:摄像头1] Called HA service media_player.turn_off for media_player.xiao_ai
-[tvmonitor:摄像头1] Daily total: 122.0min exceeded threshold 120min
+[tvmonitor:摄像头1] State: WATCHING → RESTING (rest 20min)
+[tvmonitor:摄像头1] TV turned on during rest (7.5min remaining), turning off immediately
+[tvmonitor:摄像头1] Rest period complete, ready for next session
+[tvmonitor:摄像头1] Daily total 61.0min exceeded limit 60min, locked until midnight
+[tvmonitor:摄像头1] Daily reset, all counters cleared
 ```
 
 ## Out of Scope
