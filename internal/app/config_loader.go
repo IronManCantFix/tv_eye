@@ -95,14 +95,13 @@ func parseConfigYAML(yamlBytes []byte) (constant.Config, error) {
 		return cfg, fmt.Errorf("conf.yaml 只能包含一个 YAML 文档")
 	}
 
-	if err := checkDuplicateIDs(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-// checkDuplicateIDs 检查配置中是否有重复的摄像头ID (用于 API 严格校验)
-func checkDuplicateIDs(cfg constant.Config) error {
+func validateConfig(cfg constant.Config) error {
 	if cfg.DailyMerge.Enabled && cfg.DailyMerge.Time == "" {
 		return fmt.Errorf("daily_merge.time 不能为空")
 	}
@@ -121,7 +120,41 @@ func checkDuplicateIDs(cfg constant.Config) error {
 			return fmt.Errorf("发现重复的摄像头 ID: %s", cam.ID)
 		}
 		seen[cam.ID] = true
+
+		if err := validateCameraConfig(cam); err != nil {
+			return fmt.Errorf("摄像头 %s 配置错误: %w", cam.ID, err)
+		}
 	}
+	return nil
+}
+
+func validateCameraConfig(cam constant.Camera) error {
+	format := strings.TrimSpace(cam.Format)
+	if format != "" && format != "ts" && format != "mp4" {
+		return fmt.Errorf("format 仅支持 ts 或 mp4")
+	}
+
+	mode := strings.TrimSpace(cam.Mode)
+	if mode != "" && mode != "normal" && mode != "timelapse" {
+		return fmt.Errorf("mode 仅支持 normal 或 timelapse")
+	}
+
+	if cam.SegmentDuration < 0 {
+		return fmt.Errorf("segment_duration 不能为负数")
+	}
+	if cam.RetentionDays < -1 {
+		return fmt.Errorf("retention_days 不能小于 -1")
+	}
+	if cam.CaptureInterval < 0 {
+		return fmt.Errorf("capture_interval 不能为负数")
+	}
+	if cam.MinSizeKb < 0 {
+		return fmt.Errorf("min_size_kb 不能为负数")
+	}
+	if cam.MotionDetectRatioThreshold < 0 || cam.MotionDetectRatioThreshold > 1 {
+		return fmt.Errorf("motionDetectRatioThreshold 必须在 0 到 1 之间")
+	}
+
 	return nil
 }
 

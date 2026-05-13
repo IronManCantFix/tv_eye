@@ -125,6 +125,91 @@ func TestParseConfigYAMLRejectsEmptyConfig(t *testing.T) {
 	}
 }
 
+func TestParseConfigYAMLRejectsInvalidCameraFormat(t *testing.T) {
+	_, err := parseConfigYAML([]byte(`
+cameras:
+  - id: "cam_01"
+    format: "avi"
+`))
+	if err == nil {
+		t.Fatal("expected invalid format to fail")
+	}
+	if !strings.Contains(err.Error(), "format") || !strings.Contains(err.Error(), "cam_01") {
+		t.Fatalf("expected error to mention camera and format, got %v", err)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidCameraMode(t *testing.T) {
+	_, err := parseConfigYAML([]byte(`
+cameras:
+  - id: "cam_01"
+    mode: "Normal"
+`))
+	if err == nil {
+		t.Fatal("expected invalid mode to fail")
+	}
+	if !strings.Contains(err.Error(), "mode") || !strings.Contains(err.Error(), "cam_01") {
+		t.Fatalf("expected error to mention camera and mode, got %v", err)
+	}
+}
+
+func TestParseConfigYAMLRejectsInvalidCameraNumbers(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "negative segment duration",
+			yaml: `
+cameras:
+  - id: "cam_01"
+    segment_duration: -1
+`,
+			want: "segment_duration",
+		},
+		{
+			name: "invalid retention days",
+			yaml: `
+cameras:
+  - id: "cam_01"
+    retention_days: -2
+`,
+			want: "retention_days",
+		},
+		{
+			name: "negative min size",
+			yaml: `
+cameras:
+  - id: "cam_01"
+    min_size_kb: -1
+`,
+			want: "min_size_kb",
+		},
+		{
+			name: "invalid motion threshold",
+			yaml: `
+cameras:
+  - id: "cam_01"
+    motionDetectRatioThreshold: 1.5
+`,
+			want: "motionDetectRatioThreshold",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseConfigYAML([]byte(tt.yaml))
+			if err == nil {
+				t.Fatal("expected invalid config to fail")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error to mention %s, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func testRecordEntry(t *testing.T, dateKey string) recordEntry {
 	t.Helper()
 
