@@ -41,6 +41,7 @@ type TVMonitor struct {
 	dailyLocked  bool
 	ha           *HAClient
 	detector     *Detector
+	restHandled  bool // prevents repeated HA calls during rest violations
 	mu           sync.Mutex
 }
 
@@ -101,20 +102,49 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 
 	m.lastDate = time.Now().Format("2006-01-02")
 
+	// Reconnection: if frame read fails, attempt to reopen the stream
+	consecutiveFailures := 0
+	const maxFailures = 10
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("[tvmonitor:%s] Monitor stopped", m.config.CameraID)
 			return
 		case <-ticker.C:
-			m.tick(cap, &frame)
+			action := m.tick(cap, &frame)
+			if action == tickActionReconnect {
+				consecutiveFailures++
+				if consecutiveFailures >= maxFailures {
+					log.Printf("[tvmonitor:%s] Reconnecting RTSP stream...", m.config.CameraID)
+					cap.Close()
+					newCap, err := gocv.OpenVideoCapture(m.rtspURL)
+					if err != nil {
+						log.Printf("[tvmonitor:%s] Reconnection failed: %v", m.config.CameraID, err)
+						// Keep old cap closed, will retry next cycle
+						cap = newCap // nil, subsequent ticks will keep failing and re-retrying
+					} else {
+						cap = newCap
+						log.Printf("[tvmonitor:%s] Reconnected successfully", m.config.CameraID)
+					}
+					consecutiveFailures = 0
+				}
+			} else {
+				consecutiveFailures = 0
+			}
 		}
 	}
 }
 
-func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) {
+type tickAction int
+
+const (
+	tickActionNone tickAction = iota
+	tickActionReconnect
+)
+
+func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Daily reset at midnight
 	today := time.Now().Format("2006-01-02")
@@ -130,15 +160,20 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) {
 
 	// Check if within monitor time range
 	if !util.IsWithinTimeRange(m.config.MonitorTime) {
-		return
+		m.mu.Unlock()
+		return tickActionNone
 	}
 
 	// Read frame
 	if ok := cap.Read(frame); !ok || frame.Empty() {
-		return
+		m.mu.Unlock()
+		return tickActionReconnect
 	}
 
 	tvOn := m.detector.TVState(*frame)
+
+	// Collect HA actions to perform outside the lock
+	var haAction func()
 
 	switch m.state {
 	case StateIdle:
@@ -153,33 +188,46 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) {
 		if !tvOn {
 			log.Printf("[tvmonitor:%s] TV turned off naturally", m.config.CameraID)
 			m.setState(StateIdle)
-			return
-		}
+		} else {
+			m.dailyMinutes += float64(m.config.CheckInterval) / 60.0
+			sessionMin := time.Since(m.sessionStart).Minutes()
 
-		m.dailyMinutes += float64(m.config.CheckInterval) / 60.0
-		sessionMin := time.Since(m.sessionStart).Minutes()
-
-		if m.dailyMinutes >= m.config.MaxDailyMinutes {
-			log.Printf("[tvmonitor:%s] Daily total %.1fmin exceeded limit %.0fmin, locked until midnight",
-				m.config.CameraID, m.dailyMinutes, m.config.MaxDailyMinutes)
-			m.dailyLocked = true
-			m.ha.TriggerShutdown(m.prefix(), m.config.HAMessage)
-			m.restStart = time.Now()
-			m.setState(StateResting)
-		} else if sessionMin >= m.config.MaxSessionMinutes {
-			log.Printf("[tvmonitor:%s] Session %.1fmin exceeded limit %.0fmin, turning off TV",
-				m.config.CameraID, sessionMin, m.config.MaxSessionMinutes)
-			m.ha.TriggerShutdown(m.prefix(), m.config.HAMessage)
-			m.restStart = time.Now()
-			m.setState(StateResting)
+			if m.dailyMinutes >= m.config.MaxDailyMinutes {
+				log.Printf("[tvmonitor:%s] Daily total %.1fmin exceeded limit %.0fmin, locked until midnight",
+					m.config.CameraID, m.dailyMinutes, m.config.MaxDailyMinutes)
+				m.dailyLocked = true
+				prefix := m.prefix()
+				msg := m.config.HAMessage
+				ha := m.ha
+				m.restStart = time.Now()
+				m.setState(StateResting)
+				m.restHandled = false
+				haAction = func() { ha.TriggerShutdown(prefix, msg) }
+			} else if sessionMin >= m.config.MaxSessionMinutes {
+				log.Printf("[tvmonitor:%s] Session %.1fmin exceeded limit %.0fmin, turning off TV",
+					m.config.CameraID, sessionMin, m.config.MaxSessionMinutes)
+				prefix := m.prefix()
+				msg := m.config.HAMessage
+				ha := m.ha
+				m.restStart = time.Now()
+				m.setState(StateResting)
+				m.restHandled = false
+				haAction = func() { ha.TriggerShutdown(prefix, msg) }
+			}
 		}
 
 	case StateResting:
-		if tvOn {
+		if tvOn && !m.restHandled {
 			remaining := m.config.RestMinutes - time.Since(m.restStart).Minutes()
 			log.Printf("[tvmonitor:%s] TV on during rest (%.1fmin remaining), turning off immediately",
 				m.config.CameraID, remaining)
-			m.ha.TriggerShutdown(m.prefix(), "休息时间还没到哦，再等一下")
+			m.restHandled = true
+			prefix := m.prefix()
+			ha := m.ha
+			haAction = func() { ha.TriggerShutdown(prefix, "休息时间还没到哦，再等一下") }
+		}
+		if !tvOn {
+			m.restHandled = false // reset when TV goes off, so it can trigger again if turned back on
 		}
 
 		restElapsed := time.Since(m.restStart).Minutes()
@@ -188,6 +236,15 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) {
 			m.setState(StateIdle)
 		}
 	}
+
+	m.mu.Unlock()
+
+	// Perform HA action outside the lock to avoid blocking state machine
+	if haAction != nil {
+		haAction()
+	}
+
+	return tickActionNone
 }
 
 func (m *TVMonitor) setState(s MonitorState) {

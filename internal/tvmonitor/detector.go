@@ -21,13 +21,23 @@ func NewDetector(cfg constant.TVMonitorConfig, frameWidth, frameHeight int) *Det
 	return d
 }
 
-// pctToRect converts percentage-based ROI to pixel rectangle.
+// pctToRect converts percentage-based ROI to pixel rectangle, clamped to frame bounds.
 func (d *Detector) pctToRect(w, h int) image.Rectangle {
-	x0 := int(d.config.ROIX * float64(w))
-	y0 := int(d.config.ROIY * float64(h))
-	x1 := int((d.config.ROIX + d.config.ROIW) * float64(w))
-	y1 := int((d.config.ROIY + d.config.ROIH) * float64(h))
+	x0 := clamp(int(d.config.ROIX*float64(w)), 0, w)
+	y0 := clamp(int(d.config.ROIY*float64(h)), 0, h)
+	x1 := clamp(int((d.config.ROIX+d.config.ROIW)*float64(w)), 0, w)
+	y1 := clamp(int((d.config.ROIY+d.config.ROIH)*float64(h)), 0, h)
 	return image.Rect(x0, y0, x1, y1)
+}
+
+func clamp(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 // TVState returns true if the TV appears to be on in the given frame.
