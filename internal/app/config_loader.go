@@ -137,5 +137,29 @@ func validateAndFixConfig(cfg constant.Config) constant.Config {
 		uniqueCams = append(uniqueCams, cam)
 	}
 	cfg.Cameras = uniqueCams
+
+	// Validate TV monitors
+	var validMonitors []constant.TVMonitorConfig
+	for _, tm := range cfg.TVMonitors {
+		if tm.CameraID == "" {
+			log.Println("警告: 发现空 camera_id 的 tv_monitor 配置，已跳过")
+			continue
+		}
+		// Check that referenced camera exists
+		found := false
+		for _, cam := range uniqueCams {
+			if cam.ID == tm.CameraID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("警告: tv_monitor 引用的摄像头 [%s] 不存在，已跳过", tm.CameraID)
+			continue
+		}
+		validMonitors = append(validMonitors, tm)
+	}
+	cfg.TVMonitors = validMonitors
+
 	return cfg
 }
