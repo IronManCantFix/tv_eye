@@ -1,0 +1,29 @@
+# CamKeep 配置文件
+# mode: normal (普通录制), timelapse (延时摄影)
+daily_merge:
+    enabled: false
+    time: "03:30"
+cameras:
+    - id: 摄像头1
+      rtsp_url: rtsp://admin:password@192.168.1.100:554/live
+      retention_days: 7
+      segment_duration: 600
+      format: ts
+      min_size_kb: 1024
+      record_time: 00:00-23:59
+      mode: normal
+      capture_interval: 0
+      auto_discovered: false
+
+tv_monitors:
+  - camera_id: "摄像头1"
+    enabled: false
+    roi_auto_calibrate: true
+    max_session_minutes: 5
+    rest_minutes: 20
+    max_daily_minutes: 60
+    ha_url: "http://homeassistant.local:8123"
+    ha_token: ""
+    ha_service: "media_player.turn_off"
+    ha_entity_id: "media_player.xiao_ai"
+    ha_message: "看电视时间到了，休息一下吧"
