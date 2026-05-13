@@ -64,8 +64,24 @@ func handleIndex(c *gin.Context) {
 
 func handleStatus(c *gin.Context) {
 	service.StatusMux.RLock()
-	defer service.StatusMux.RUnlock()
-	c.JSON(200, service.StatusMap)
+	snapshot := make(map[string]gin.H, len(service.StatusMap))
+	for id, status := range service.StatusMap {
+		snapshot[id] = gin.H{
+			"id":           status.ID,
+			"is_running":   status.IsRunning,
+			"record_state": status.RecordState,
+			"start_time":   status.StartTime,
+			"mode":         status.Mode,
+			"record_time":  status.RecordTime,
+			"stream_state": status.StreamState,
+		}
+	}
+	service.StatusMux.RUnlock()
+
+	for id, status := range snapshot {
+		status["record_override"] = task.GetOverride(id)
+	}
+	c.JSON(200, snapshot)
 }
 
 func handleGetConfig(c *gin.Context) {

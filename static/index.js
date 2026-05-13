@@ -7,6 +7,7 @@ let currentSelectedCam = null;
 let pendingAction = null;
 let compactGrid = window.innerWidth < 640;
 let selectedRecordRange = {start: '', end: ''};
+let selectedRecordPath = '';
 const maxRecordRangeDays = 7;
 const recordArchiveOpenDates = new Set();
 
@@ -243,7 +244,7 @@ async function loadStatus() {
             const isRunning = recordState === 'recording' || recordState === 'motion_detecting' || recordState === 'motion_recording';
             const isSelected = currentSelectedCam === id;
             const streamState = cam.stream_state || 'offline';
-            const recordSchedule = buildRecordScheduleDisplay(cam.record_time);
+            const recordSchedule = buildRecordScheduleDisplay(cam.record_time, cam.record_override);
             let streamLight, streamText;
             let recordLight, recordText, recordTextClass;
 
@@ -341,27 +342,28 @@ async function loadStatus() {
     }
 }
 
-function buildRecordScheduleDisplay(recordTime) {
+function buildRecordScheduleDisplay(recordTime, override) {
     const rawValue = String(recordTime || '').trim();
     const ranges = parseRecordTimeRanges(rawValue);
     const hasValidRanges = ranges.length > 0;
+    const overrideState = normalizeRecordOverride(override);
 
     if (!rawValue) {
-        return {
+        const base = {
             badge: '全天',
             text: '未配置，按全天录制',
-            title: '录制计划: 未配置，系统按全天录制',
-            ...recordScheduleClasses('full')
+            title: '录制计划: 未配置，系统按全天录制'
         };
+        return applyRecordOverrideDisplay(base, overrideState, 'full');
     }
 
     if (!hasValidRanges) {
-        return {
+        const base = {
             badge: '缺省',
             text: '按全天录制',
-            title: `录制计划: ${rawValue} (未识别，系统按全天录制)`,
-            ...recordScheduleClasses('fallback')
+            title: `录制计划: ${rawValue} (未识别，系统按全天录制)`
         };
+        return applyRecordOverrideDisplay(base, overrideState, 'fallback');
     }
 
     const text = ranges.map(formatRecordRangeText).join(' / ');
@@ -371,23 +373,75 @@ function buildRecordScheduleDisplay(recordTime) {
     const inSchedule = fullDay || ranges.some(range => isMinuteInRecordRange(nowMinutes, range.start, range.end));
 
     if (fullDay) {
-        return {
+        const base = {
             badge: '全天',
             text: '全天录制',
-            title: `录制计划: ${text}`,
-            ...recordScheduleClasses('full')
+            title: `录制计划: ${text}`
+        };
+        return applyRecordOverrideDisplay(base, overrideState, 'full');
+    }
+
+    const base = {
+        badge: inSchedule ? '计划内' : '计划外',
+        text,
+        title: `录制计划: ${text}，当前${inSchedule ? '在' : '不在'}计划时间内`
+    };
+    return applyRecordOverrideDisplay(base, overrideState, inSchedule ? 'active' : 'inactive');
+}
+
+function applyRecordOverrideDisplay(base, overrideState, scheduleState) {
+    if (overrideState === 'start') {
+        return {
+            badge: '强制录',
+            text: formatScheduleTextWithState(base),
+            title: `${base.title}。当前手动覆盖: 强制录制，record_time 不会限制启动`,
+            ...recordScheduleClasses('forced-start')
+        };
+    }
+
+    if (overrideState === 'stop') {
+        return {
+            badge: '强制停',
+            text: formatScheduleTextWithState(base),
+            title: `${base.title}。当前手动覆盖: 强制停止，即使在计划内也不会录像`,
+            ...recordScheduleClasses('forced-stop')
         };
     }
 
     return {
-        badge: inSchedule ? '计划内' : '计划外',
-        text,
-        title: `录制计划: ${text}，当前${inSchedule ? '在' : '不在'}计划时间内`,
-        ...recordScheduleClasses(inSchedule ? 'active' : 'inactive')
+        badge: '自动',
+        text: formatScheduleTextWithState(base),
+        title: `${base.title}。当前手动覆盖: 自动计划`,
+        ...recordScheduleClasses(scheduleState)
     };
 }
 
+function formatScheduleTextWithState(base) {
+    if (base.badge === '全天') return base.text;
+    return `${base.badge} · ${base.text}`;
+}
+
 function recordScheduleClasses(state) {
+    if (state === 'forced-start') {
+        return {
+            bgClass: 'bg-emerald-50/80',
+            borderClass: 'border-emerald-200',
+            iconClass: 'text-emerald-600',
+            badgeClass: 'text-emerald-700',
+            textClass: 'text-slate-600'
+        };
+    }
+
+    if (state === 'forced-stop') {
+        return {
+            bgClass: 'bg-rose-50/80',
+            borderClass: 'border-rose-200',
+            iconClass: 'text-rose-500',
+            badgeClass: 'text-rose-700',
+            textClass: 'text-rose-700'
+        };
+    }
+
     if (state === 'full' || state === 'active') {
         return {
             bgClass: 'bg-emerald-50/70',
@@ -415,6 +469,11 @@ function recordScheduleClasses(state) {
         badgeClass: 'text-slate-500',
         textClass: 'text-slate-500'
     };
+}
+
+function normalizeRecordOverride(override) {
+    const value = String(override || '').trim().toLowerCase();
+    return value === 'start' || value === 'stop' ? value : 'auto';
 }
 
 function parseRecordTimeRanges(recordTime) {
@@ -480,6 +539,7 @@ function escapeHtml(value) {
 function setLayout(layoutCount) {
     currentLayout = layoutCount;
     if (activeCell >= layoutCount) activeCell = 0;
+    syncSelectedRecordFromActiveCell();
 
     [1, 4, 6].forEach(num => {
         const btn = document.getElementById(`btn-layout-${num}`);
@@ -543,6 +603,9 @@ function closeActiveCell() {
 function clearCell(index) {
     stopCellPlayback(index);
     cellData[index] = null;
+    if (index === activeCell) {
+        syncSelectedRecordFromActiveCell();
+    }
 
     const liveIframe = document.getElementById(`live-iframe-${index}`);
     const dplayerContainer = document.getElementById(`dplayer-${index}`);
@@ -590,6 +653,7 @@ function stopCellPlayback(index) {
 
 function setActiveCell(index) {
     activeCell = index;
+    syncSelectedRecordFromActiveCell();
     updateFocusUI();
 }
 
@@ -628,6 +692,9 @@ function previewLive(camId) {
 
 function playVideo(source, isLive, title) {
     cellData[activeCell] = {source, isLive, title};
+    if (isLive) {
+        setSelectedRecordPath('');
+    }
     executePlayInCell(activeCell, source, isLive, title);
 
     if (isLive && currentLayout > 1) {
@@ -638,14 +705,51 @@ function playVideo(source, isLive, title) {
     }
 }
 
+function getRecordPath(file) {
+    return String((file && (file.path || file.url || file.name)) || '').trim();
+}
+
+function setSelectedRecordPath(path) {
+    selectedRecordPath = String(path || '').trim();
+    applySelectedRecordCardStyles();
+}
+
+function syncSelectedRecordFromActiveCell() {
+    const activeData = cellData[activeCell];
+    const path = activeData && !activeData.isLive ? activeData.recordPath : '';
+    setSelectedRecordPath(path || '');
+}
+
+function applySelectedRecordCardStyles() {
+    document.querySelectorAll('[data-record-path]').forEach(item => {
+        setRecordItemSelected(item, selectedRecordPath !== '' && item.dataset.recordPath === selectedRecordPath);
+    });
+}
+
+function setRecordItemSelected(item, isSelected) {
+    item.classList.toggle('border-slate-200', !isSelected);
+    item.classList.toggle('bg-white', !isSelected);
+    item.classList.toggle('border-emerald-400', isSelected);
+    item.classList.toggle('bg-emerald-50/70', isSelected);
+    item.classList.toggle('ring-2', isSelected);
+    item.classList.toggle('ring-emerald-200/70', isSelected);
+    item.classList.toggle('shadow-[0_8px_20px_-12px_rgba(16,185,129,0.7)]', isSelected);
+    item.setAttribute('aria-current', isSelected ? 'true' : 'false');
+
+    const indicator = item.querySelector('[data-record-playing]');
+    if (indicator) indicator.classList.toggle('hidden', !isSelected);
+}
+
 async function playRecord(file, title) {
     const targetCell = activeCell;
-    showProbeLoadingInCell(targetCell, title);
+    const recordPath = getRecordPath(file);
+    setSelectedRecordPath(recordPath);
+    showProbeLoadingInCell(targetCell, title, recordPath);
 
     try {
         // 1. 合并后的完美大 MP4：所有设备直接走原生秒开播放
         if (file.name.toLowerCase().endsWith('.mp4') && file.name.includes('_merged')) {
-            cellData[targetCell] = {source: file.url, isLive: false, title};
+            cellData[targetCell] = {source: file.url, isLive: false, title, recordPath};
             // 传入 true，强制使用原生的 <video> 标签播放 mp4
             executePlayInCell(targetCell, file.url, false, title, true);
             updateFocusUI();
@@ -664,7 +768,7 @@ async function playRecord(file, title) {
             if (isAppleNative || !supportHEVC) {
                 // 直接拦截并抛出不支持的 UI 提示，不再走转码逻辑
                 stopCellPlayback(targetCell);
-                cellData[targetCell] = {source: '', isLive: false, title: `${title} · 播放受限`};
+                cellData[targetCell] = {source: '', isLive: false, title: `${title} · 播放受限`, recordPath};
 
                 const emptyState = document.getElementById(`empty-state-${targetCell}`);
                 const label = document.getElementById(`label-${targetCell}`);
@@ -696,10 +800,10 @@ async function playRecord(file, title) {
 
             // 设备支持 H.265 时，强制走 fMP4 重封装！
             const remuxUrl = `/play_remux/${encodeURI(file.path)}`;
-            cellData[targetCell] = {source: remuxUrl, isLive: false, title};
+            cellData[targetCell] = {source: remuxUrl, isLive: false, title, recordPath};
 
             // 传 true 强制使用原生的 <video> 标签播放 mp4 流
-            const warningMsg = "流式播放：当前片段暂不支持进度条拖拽";
+            const warningMsg = "当前为H.265片段的实时重封装播放，浏览器内暂不支持拖拽定位；需要快进回看时，优先选择自动合并后的MP4，或下载后用VLC、PotPlayer、IINA等播放器打开。";
             executePlayInCell(targetCell, remuxUrl, false, title, true, warningMsg);
             updateFocusUI();
             return; // 直接返回，拦截默认的 TS 播放逻辑
@@ -709,7 +813,7 @@ async function playRecord(file, title) {
     }
 
     // 非 H.265 的 .ts 碎片，走默认播放逻辑 (HLS 或 mpegts)
-    cellData[targetCell] = {source: file.url, isLive: false, title};
+    cellData[targetCell] = {source: file.url, isLive: false, title, recordPath};
     // 不强制使用原生播放器
     executePlayInCell(targetCell, file.url, false, title, false);
     updateFocusUI();
@@ -738,9 +842,9 @@ function isMobilePlayback() {
     return window.matchMedia('(max-width: 767px), (pointer: coarse)').matches;
 }
 
-function showProbeLoadingInCell(index, title) {
+function showProbeLoadingInCell(index, title, recordPath = '') {
     stopCellPlayback(index);
-    cellData[index] = {source: '', isLive: false, title: `检测编码: ${title}`};
+    cellData[index] = {source: '', isLive: false, title: `检测编码: ${title}`, recordPath};
 
     const liveIframe = document.getElementById(`live-iframe-${index}`);
     const dplayerContainer = document.getElementById(`dplayer-${index}`);
@@ -1191,6 +1295,7 @@ async function loadRecords(camId) {
             groupDiv.appendChild(content);
             list.appendChild(groupDiv);
         });
+        applySelectedRecordCardStyles();
     } catch (e) {
         countBadge.innerText = '加载失败';
         list.innerHTML = '';
@@ -1240,7 +1345,9 @@ function parseRecordMeta(file) {
 
 function createRecordItem(camId, file, meta) {
     const item = document.createElement('div');
+    const recordPath = getRecordPath(file);
     item.className = 'group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md active:translate-y-0';
+    item.dataset.recordPath = recordPath;
     item.onclick = () => playRecord(file, `回放: ${camId} (${meta.timeDisplay})`);
 
     item.innerHTML = `
@@ -1256,6 +1363,7 @@ function createRecordItem(camId, file, meta) {
                 <div class="font-mono text-sm font-extrabold leading-5 text-slate-800">${meta.timeDisplay}</div>
                 <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
                     <span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${meta.kindClass}">${meta.kind}</span>
+                    <span data-record-playing class="hidden rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">播放中</span>
                     <span class="font-mono text-[10px] font-medium text-slate-400">${meta.ext}</span>
                     <span class="font-mono text-[10px] font-medium text-slate-400">${file.size}</span>
                 </div>
@@ -1279,6 +1387,7 @@ function createRecordItem(camId, file, meta) {
     const deleteBtn = item.querySelector('[data-record-action="delete"]');
     downloadBtn.onclick = (event) => downloadRecord(event, file.path);
     deleteBtn.onclick = (event) => deleteRecord(event, camId, file.path);
+    setRecordItemSelected(item, selectedRecordPath !== '' && selectedRecordPath === recordPath);
     return item;
 }
 

@@ -55,6 +55,14 @@ func getOverride(camID string) string {
 	return overrides[camID]
 }
 
+func GetOverride(camID string) string {
+	control := getOverride(camID)
+	if control == "" {
+		return "auto"
+	}
+	return control
+}
+
 func recordingWindowEnabled(control string, inTimeRange bool) bool {
 	switch control {
 	case "start":

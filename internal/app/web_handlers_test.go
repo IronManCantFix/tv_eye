@@ -1,11 +1,41 @@
 package app
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/r0n9/camkeep/internal/service"
 )
+
+func TestHandleStatusIncludesRecordOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	camID := "status-override-auto"
+	deleteStatusForAppTest(t, camID)
+	service.UpdateStatus(camID, false, "normal", "09:00-18:00")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	handleStatus(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload[camID]["record_override"]; got != "auto" {
+		t.Fatalf("expected record_override auto, got %v", got)
+	}
+}
 
 func TestFilterRecordEntriesDefaultKeepsLatestSevenAvailableDates(t *testing.T) {
 	entries := []recordEntry{
@@ -233,4 +263,23 @@ func recordFilePaths(files []recordFile) []string {
 		paths = append(paths, file.Path)
 	}
 	return paths
+}
+
+func deleteStatusForAppTest(t *testing.T, camID string) {
+	t.Helper()
+
+	service.StatusMux.Lock()
+	oldStatus, hadStatus := service.StatusMap[camID]
+	delete(service.StatusMap, camID)
+	service.StatusMux.Unlock()
+
+	t.Cleanup(func() {
+		service.StatusMux.Lock()
+		if hadStatus {
+			service.StatusMap[camID] = oldStatus
+		} else {
+			delete(service.StatusMap, camID)
+		}
+		service.StatusMux.Unlock()
+	})
 }

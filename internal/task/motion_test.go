@@ -102,6 +102,17 @@ func TestMotionDetectionShouldRunRespectsOverrideStop(t *testing.T) {
 	}
 }
 
+func TestGetOverrideDefaultsToAuto(t *testing.T) {
+	setOverridesForTest(t, map[string]string{"manual-start": "start"})
+
+	if got := GetOverride("manual-start"); got != "start" {
+		t.Fatalf("expected start override, got %q", got)
+	}
+	if got := GetOverride("missing"); got != "auto" {
+		t.Fatalf("expected missing override to be auto, got %q", got)
+	}
+}
+
 func TestMotionDetectionShouldRunAllowsIdleStream(t *testing.T) {
 	cam := constant.Camera{ID: "motion-idle-stream", Mode: "normal", MotionDetect: true}
 	setOverridesForTest(t, nil)
