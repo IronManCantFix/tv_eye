@@ -23,8 +23,31 @@ type DailyMergeConfig struct {
 	Time    string `yaml:"time"`
 }
 
+type TVMonitorConfig struct {
+	CameraID            string  `yaml:"camera_id"`
+	Enabled             bool    `yaml:"enabled"`
+	MonitorTime         string  `yaml:"monitor_time"`
+	ROIX                float64 `yaml:"roi_x"`
+	ROIY                float64 `yaml:"roi_y"`
+	ROIW                float64 `yaml:"roi_w"`
+	ROIH                float64 `yaml:"roi_h"`
+	ROIAutoCalibrate    bool    `yaml:"roi_auto_calibrate"`
+	CheckInterval       int     `yaml:"check_interval"`
+	BrightnessThreshold float64 `yaml:"brightness_threshold"`
+	FrameDiffThreshold  float64 `yaml:"frame_diff_threshold"`
+	MaxSessionMinutes   float64 `yaml:"max_session_minutes"`
+	RestMinutes         float64 `yaml:"rest_minutes"`
+	MaxDailyMinutes     float64 `yaml:"max_daily_minutes"`
+	HAURL               string  `yaml:"ha_url"`
+	HAToken             string  `yaml:"ha_token"`
+	HAService           string  `yaml:"ha_service"`
+	HAEntityID          string  `yaml:"ha_entity_id"`
+	HAMessage           string  `yaml:"ha_message"`
+}
+
 // Config 对应 yaml 配置文件
 type Config struct {
-	DailyMerge DailyMergeConfig `yaml:"daily_merge"`
-	Cameras    []Camera         `yaml:"cameras"`
+	DailyMerge DailyMergeConfig  `yaml:"daily_merge"`
+	Cameras    []Camera          `yaml:"cameras"`
+	TVMonitors []TVMonitorConfig `yaml:"tv_monitors"`
 }
