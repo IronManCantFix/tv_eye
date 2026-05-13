@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/r0n9/camkeep/constant"
 	"github.com/r0n9/camkeep/internal/service"
 	"github.com/r0n9/camkeep/internal/task"
+	"github.com/r0n9/camkeep/internal/tvmonitor"
 )
 
 // startTasks 启动或重启所有的摄像头监控任务
@@ -28,6 +30,21 @@ func startTasks() {
 	for _, cam := range cams {
 		taskWg.Add(1)
 		go task.CameraTask(ctx, &taskWg, cam)
+	}
+
+	// Start TV monitors
+	for i := range cfg.TVMonitors {
+		tmcfg := cfg.TVMonitors[i]
+		if !tmcfg.Enabled {
+			continue
+		}
+		tvmonitor.ApplyDefaults(&tmcfg)
+
+		// Resolve RTSP URL: use go2rtc proxy like camera tasks do
+		rtspURL := fmt.Sprintf("rtsp://%s:8554/%s", constant.DefaultGo2rtcHost, tmcfg.CameraID)
+
+		taskWg.Add(1)
+		go tvmonitor.NewTVMonitor(tmcfg, rtspURL).Run(ctx, &taskWg)
 	}
 }
 
