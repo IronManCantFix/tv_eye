@@ -40,9 +40,10 @@ tv_monitors:
     max_daily_minutes: 60     # daily total max viewing time (minutes)
     ha_url: "http://homeassistant.local:8123"
     ha_token: "eyJhbGci..."
-    ha_service: "media_player.turn_off"
-    ha_entity_id: "media_player.xiao_ai"
-    ha_message: "看电视时间到了，休息一下吧"  # optional TTS before turning off
+    ha_control_service: "remote.turn_off"       # HA service to control TV (leave empty to skip)
+    ha_control_entity_id: "remote.tv_remote"     # HA entity for TV remote
+    ha_tts_entity_id: "media_player.xiao_ai"     # HA entity for TTS speaker (leave empty to skip)
+    ha_tts_message: "看电视时间到了，休息一下吧"   # TTS text
 ```
 
 ## Detection Algorithm
@@ -139,31 +140,41 @@ Every `check_interval` seconds:
 
 ## Home Assistant Integration
 
-### Turn Off TV
+Two independent HA actions, both optional:
+
+### Action 1: TV Control (remote/button)
+
+Only executed if `ha_control_service` and `ha_control_entity_id` are both non-empty.
 
 ```
 POST {ha_url}/api/services/{domain}/{service}
 Authorization: Bearer {ha_token}
 Content-Type: application/json
 
-{"entity_id": "ha_entity_id"}
+{"entity_id": "ha_control_entity_id"}
 ```
 
-Where `ha_service` like `media_player.turn_off` is split into domain=`media_player` and service=`turn_off`.
+Example: `ha_control_service: "remote.turn_off"`, `ha_control_entity_id: "remote.tv_remote"`
 
-### TTS Announcement (if ha_message is set, before turning off)
+### Action 2: TTS Announcement
+
+Only executed if `ha_tts_entity_id` and `ha_tts_message` are both non-empty.
 
 ```
 POST {ha_url}/api/services/tts/google_translate_say
 Authorization: Bearer {ha_token}
 Content-Type: application/json
 
-{"entity_id": "ha_entity_id", "message": "ha_message value"}
+{"entity_id": "ha_tts_entity_id", "message": "ha_tts_message value"}
 ```
 
-TTS is called first, then wait 5 seconds before calling the turn-off action.
+Example: `ha_tts_entity_id: "media_player.xiao_ai"`, `ha_tts_message: "看电视时间到了"`
 
-During rest period violations (TV turned on during rest), a shorter warning message is sent: "休息时间还没到哦，再等一下" + immediate turn off.
+### Execution Order
+
+TTS is called first (if configured), then wait 5 seconds for playback, then TV control (if configured). Every action logs success/failure.
+
+During rest period violations, a shorter TTS message "休息时间还没到哦，再等一下" is used instead of the configured message.
 
 ## Code Structure
 
@@ -198,9 +209,10 @@ type TVMonitorConfig struct {
     MaxDailyMinutes      float64 `yaml:"max_daily_minutes"`
     HAURL                string  `yaml:"ha_url"`
     HAToken              string  `yaml:"ha_token"`
-    HAService            string  `yaml:"ha_service"`
-    HAEntityID           string  `yaml:"ha_entity_id"`
-    HAMessage            string  `yaml:"ha_message"`
+    HAControlService     string  `yaml:"ha_control_service"`
+    HAControlEntityID    string  `yaml:"ha_control_entity_id"`
+    HATTSEntityID        string  `yaml:"ha_tts_entity_id"`
+    HATTSMessage         string  `yaml:"ha_tts_message"`
 }
 ```
 

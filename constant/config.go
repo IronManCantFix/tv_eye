@@ -40,9 +40,10 @@ type TVMonitorConfig struct {
 	MaxDailyMinutes     float64 `yaml:"max_daily_minutes"`
 	HAURL               string  `yaml:"ha_url"`
 	HAToken             string  `yaml:"ha_token"`
-	HAService           string  `yaml:"ha_service"`
-	HAEntityID          string  `yaml:"ha_entity_id"`
-	HAMessage           string  `yaml:"ha_message"`
+	HAControlService    string  `yaml:"ha_control_service"`    // 控制遥控器的 HA 服务 (如 remote.turn_off)，留空则不控制
+	HAControlEntityID   string  `yaml:"ha_control_entity_id"`  // 遥控器实体 ID (如 remote.tv_remote)
+	HATTSEntityID       string  `yaml:"ha_tts_entity_id"`      // TTS 播报实体 ID (如 media_player.xiao_ai)，留空则不播报
+	HATTSMessage        string  `yaml:"ha_tts_message"`        // TTS 播报文本
 }
 
 // Config 对应 yaml 配置文件

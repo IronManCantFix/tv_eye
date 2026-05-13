@@ -197,7 +197,7 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 					m.config.CameraID, m.dailyMinutes, m.config.MaxDailyMinutes)
 				m.dailyLocked = true
 				prefix := m.prefix()
-				msg := m.config.HAMessage
+				msg := m.config.HATTSMessage
 				ha := m.ha
 				m.restStart = time.Now()
 				m.setState(StateResting)
@@ -207,7 +207,7 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 				log.Printf("[tvmonitor:%s] Session %.1fmin exceeded limit %.0fmin, turning off TV",
 					m.config.CameraID, sessionMin, m.config.MaxSessionMinutes)
 				prefix := m.prefix()
-				msg := m.config.HAMessage
+				msg := m.config.HATTSMessage
 				ha := m.ha
 				m.restStart = time.Now()
 				m.setState(StateResting)

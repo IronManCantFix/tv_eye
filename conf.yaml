@@ -19,3 +19,45 @@ cameras:
     record_time: "07:00-19:00" # 录制区间
     mode: "timelapse"            # 模式: "timelapse" 延时录像
     capture_interval: 1       # 延时录像，抓拍间隔(秒)，例如 5 表示每5秒抓一帧
+
+# ======================== 电视观看时间监控 ========================
+# 通过摄像头画面检测电视是否在播放，自动控制观看时长
+# 需要摄像头对准电视屏幕，搭配 Home Assistant + 小爱音箱实现自动关闭
+tv_monitors:
+  - camera_id: "摄像头1"              # 关联的摄像头 ID (必须与上方 cameras 中的 id 一致)
+    enabled: false                     # 是否启用监控 (true/false)
+    monitor_time: "08:00-23:00"        # 监控时段，此范围外不检测，支持跨天如 "22:00-06:00"
+
+    # --- 电视屏幕区域 ---
+    # 电视在画面中的矩形区域 (百分比坐标 0.0~1.0)
+    # 留空且开启 roi_auto_calibrate 可自动识别
+    roi_auto_calibrate: true           # 启动时自动识别电视屏幕区域
+    # roi_x: 0.2                       # 区域左上角 X (百分比)
+    # roi_y: 0.1                       # 区域左上角 Y (百分比)
+    # roi_w: 0.6                       # 区域宽度 (百分比)
+    # roi_h: 0.5                       # 区域高度 (百分比)
+
+    # --- 检测参数 ---
+    check_interval: 30                 # 取帧检测间隔 (秒)，越小越精确但CPU消耗越高
+    brightness_threshold: 30           # 亮度阈值，ROI区域平均亮度低于此值判定为关机
+    frame_diff_threshold: 5.0          # 帧差阈值，连续两帧差异低于此值判定为静态画面(如屏保)
+
+    # --- 观看时间规则 ---
+    max_session_minutes: 5             # 单次最长观看时长 (分钟)，到达后自动关闭电视
+    rest_minutes: 20                   # 强制休息时长 (分钟)，休息期间电视被打开会立即关闭
+    max_daily_minutes: 60              # 每日总观看时长上限 (分钟)，用完后锁定到次日零点重置
+
+    # --- Home Assistant 联动 ---
+    # 两个动作相互独立，按需配置，留空则不执行对应动作
+    ha_url: "http://homeassistant.local:8123"  # HA 的访问地址
+    ha_token: ""                       # HA 的 Long-Lived Access Token (在 HA 用户设置中生成)
+
+    # 动作一: 遥控器控制 (关闭电视)
+    # 留空 ha_control_service 或 ha_control_entity_id 则不执行控制
+    ha_control_service: "remote.turn_off"        # HA 遥控服务 (domain.service 格式)，如 remote.turn_off、script.turn_on
+    ha_control_entity_id: "remote.tv_remote"      # 遥控器/开关实体 ID
+
+    # 动作二: 小爱音箱 TTS 语音播报
+    # 留空 ha_tts_entity_id 则不播报
+    ha_tts_entity_id: "media_player.xiao_ai"      # 小爱音箱实体 ID
+    ha_tts_message: "看电视时间到了，休息一下吧"      # 播报文本 (留空则不播报)
