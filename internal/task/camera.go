@@ -17,27 +17,35 @@ import (
 )
 
 var (
-	overrideMux sync.RWMutex
-	overrides   = make(map[string]string) // key: 摄像头ID, value: "start", "stop", 或空("auto")
+	overrideMux     sync.RWMutex
+	overrideSaveMux sync.Mutex
+	overrides       = make(map[string]string) // key: 摄像头ID, value: "start", "stop", 或空("auto")
 )
 
 // SetOverride 设置手动录像指令
-func SetOverride(camID, action string) {
-	overrideMux.Lock()
-	if action == "auto" {
-		delete(overrides, camID) // 恢复自动
-	} else if action == "start" {
-		overrides[camID] = action
-		service.UpdateRecordStatus(camID, true) // 立刻更新当前status
-	} else if action == "stop" {
-		overrides[camID] = action
-		service.UpdateRecordStatus(camID, false)
+func SetOverride(camID, action string) error {
+	if camID == "" {
+		return fmt.Errorf("摄像头 ID 不能为空")
 	}
 
+	overrideMux.Lock()
+	switch action {
+	case "auto":
+		delete(overrides, camID) // 恢复自动
+	case "start":
+		overrides[camID] = action
+	case "stop":
+		overrides[camID] = action
+		service.UpdateRecordStatus(camID, false)
+	default:
+		overrideMux.Unlock()
+		return fmt.Errorf("无效的手动录像指令: %s", action)
+	}
 	overrideMux.Unlock()
 
 	// 异步保存到磁盘，不阻塞当前 API 请求
 	go SaveOverrides()
+	return nil
 }
 
 // getOverride 获取当前的手动指令
@@ -47,6 +55,25 @@ func getOverride(camID string) string {
 	return overrides[camID]
 }
 
+func GetOverride(camID string) string {
+	control := getOverride(camID)
+	if control == "" {
+		return "auto"
+	}
+	return control
+}
+
+func recordingWindowEnabled(control string, inTimeRange bool) bool {
+	switch control {
+	case "start":
+		return true
+	case "stop":
+		return false
+	default:
+		return inTimeRange
+	}
+}
+
 // CameraTask 负责单个摄像头的生命周期管理
 func CameraTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 	defer wg.Done()
@@ -54,13 +81,22 @@ func CameraTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 	camDir := filepath.Join(constant.DefaultRecordBaseDir, cam.ID)
 	os.MkdirAll(camDir, 0755)
 
+	service.UpdateStatus(cam.ID, false, cam.Mode, cam.RecordTime)
+
+	if motionRecordingEnabled(cam) {
+		runMotionCameraTask(ctx, cam, camDir)
+		return
+	}
+	runScheduledCameraTask(ctx, cam, camDir)
+}
+
+func runScheduledCameraTask(ctx context.Context, cam constant.Camera, camDir string) {
 	var ffmpegCmd *exec.Cmd
 	var ffmpegCancel context.CancelFunc
+	var ffmpegDone chan error
 
-	ticker := time.NewTicker(10 * time.Second) // 每10秒检查一次状态
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-
-	service.UpdateStatus(cam.ID, false, cam.Mode)
 
 	for {
 		select {
@@ -68,36 +104,22 @@ func CameraTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 			// 全局退出时，如果 ffmpeg 还在运行，杀掉它
 			if ffmpegCancel != nil {
 				ffmpegCancel()
+				if ffmpegDone != nil {
+					<-ffmpegDone
+				}
 			}
+			service.UpdateStatus(cam.ID, false, cam.Mode, cam.RecordTime)
 			return
 		case <-ticker.C:
-			// 提前铺路，创建今天和明天的日期目录
-			// 防止跨天时 (00:00:00) FFmpeg 因为目标文件夹不存在而报错崩溃
 			now := time.Now()
-			todayDir := filepath.Join(camDir, now.Format("2006-01-02"))
-			tomorrowDir := filepath.Join(camDir, now.AddDate(0, 0, 1).Format("2006-01-02"))
-			os.MkdirAll(todayDir, 0755)
-			os.MkdirAll(tomorrowDir, 0755)
+			ensureCameraDateDirs(camDir, now)
 
 			// 判断逻辑接入覆写
 			control := getOverride(cam.ID)
 			inTimeRange := util.IsWithinTimeRange(cam.RecordTime)
+			streamState := currentStreamState(cam.ID)
 
-			service.StatusMux.RLock()
-			streamState := "offline" // 默认为断开
-			if st, ok := service.StatusMap[cam.ID]; ok {
-				streamState = st.StreamState
-			}
-			service.StatusMux.RUnlock()
-
-			shouldRun := false
-			if control == "start" {
-				shouldRun = true
-			} else if control == "stop" {
-				shouldRun = false
-			} else {
-				shouldRun = inTimeRange
-			}
+			shouldRun := recordingWindowEnabled(control, inTimeRange)
 
 			// 注意：如果状态是 "idle" (按需休眠) 是可以启动的，只有明确的 "offline" 才拦截
 			if streamState == "offline" {
@@ -105,16 +127,29 @@ func CameraTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 			}
 
 			isRunning := ffmpegCmd != nil && ffmpegCmd.ProcessState == nil
+			if ffmpegCmd != nil && !isRunning && ffmpegDone != nil {
+				select {
+				case <-ffmpegDone:
+					ffmpegCmd = nil
+					ffmpegDone = nil
+					ffmpegCancel = nil
+					isRunning = false
+				default:
+					isRunning = true
+				}
+			}
 
 			if shouldRun && !isRunning {
 				log.Printf("[%s] 启动录制...", cam.ID)
 				var fCtx context.Context
 				fCtx, ffmpegCancel = context.WithCancel(ctx)
 				ffmpegCmd = startFFmpeg(fCtx, cam, camDir)
+				ffmpegDone = make(chan error, 1)
 
 				go func(c *exec.Cmd) {
 					err := c.Wait()
 					log.Printf("[%s] FFmpeg 进程已退出, err: %v", cam.ID, err)
+					ffmpegDone <- err
 				}(ffmpegCmd)
 
 				isRunning = true
@@ -123,18 +158,168 @@ func CameraTask(ctx context.Context, wg *sync.WaitGroup, cam constant.Camera) {
 				// 细化日志输出，方便排查是时间到了还是流断了
 				if streamState == "offline" {
 					log.Printf("[%s] 检测到流状态离线 (Offline)，已强制中断录制...", cam.ID)
+				} else if control == "stop" {
+					log.Printf("[%s] 已被手动停止，停止录制...", cam.ID)
 				} else {
-					log.Printf("[%s] 录制条件不符 (或已被手动停止)，停止录制...", cam.ID)
+					log.Printf("[%s] 录制条件不符，停止录制...", cam.ID)
 				}
 				ffmpegCancel()
+				if ffmpegDone != nil {
+					<-ffmpegDone
+				}
 				ffmpegCmd = nil
+				ffmpegDone = nil
+				ffmpegCancel = nil
 
 				isRunning = false
 			}
 
-			service.UpdateStatus(cam.ID, isRunning, cam.Mode)
+			service.UpdateStatus(cam.ID, isRunning, cam.Mode, cam.RecordTime)
 		}
 	}
+}
+
+func runMotionCameraTask(ctx context.Context, cam constant.Camera, camDir string) {
+	var harvestCmd *exec.Cmd
+	var harvestCancel context.CancelFunc
+	var harvestDone chan error
+	var motionSession *motionRecordSession
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if harvestCancel != nil {
+				harvestCancel()
+				if harvestDone != nil {
+					<-harvestDone
+				}
+			}
+			service.UpdateStatus(cam.ID, false, cam.Mode, cam.RecordTime)
+			return
+		case <-ticker.C:
+			now := time.Now()
+			ensureCameraDateDirs(camDir, now)
+
+			control := getOverride(cam.ID)
+			inTimeRange := util.IsWithinTimeRange(cam.RecordTime)
+			streamState := currentStreamState(cam.ID)
+			recordingWindow := recordingWindowEnabled(control, inTimeRange)
+			harvestShouldRun := recordingWindow && streamState != "offline"
+			if !harvestShouldRun {
+				resetMotionDetected(cam.ID)
+			}
+
+			if harvestCmd != nil && harvestDone != nil {
+				select {
+				case <-harvestDone:
+					harvestCmd = nil
+					harvestDone = nil
+					harvestCancel = nil
+					if motionSession != nil && ctx.Err() == nil {
+						log.Printf("[%s] 动检 Time-Shift 缓存引擎退出，结束当前动检事件...", cam.ID)
+						finishMotionRecordSession(ctx, cam, camDir, motionSession, time.Now())
+						motionSession = nil
+					}
+				default:
+				}
+			}
+
+			harvestRunning := harvestCmd != nil
+			if harvestShouldRun && !harvestRunning {
+				log.Printf("[%s] 启动动检 Time-Shift 大块缓存引擎...", cam.ID)
+				var hCtx context.Context
+				hCtx, harvestCancel = context.WithCancel(ctx)
+				var err error
+				harvestCmd, err = startMotionTimeShiftFFmpeg(hCtx, cam)
+				if err != nil {
+					log.Printf("[%s] 启动动检 Time-Shift 缓存引擎失败: %v", cam.ID, err)
+					harvestCancel()
+					harvestCancel = nil
+					harvestCmd = nil
+				} else {
+					harvestDone = make(chan error, 1)
+					go func(c *exec.Cmd) {
+						err := c.Wait()
+						log.Printf("[%s] 动检 Time-Shift 缓存引擎已退出, err: %v", cam.ID, err)
+						harvestDone <- err
+					}(harvestCmd)
+				}
+			} else if !harvestShouldRun && harvestRunning {
+				if streamState == "offline" {
+					log.Printf("[%s] 检测到流状态离线 (Offline)，停止动检 Time-Shift 缓存引擎...", cam.ID)
+				} else if control == "stop" {
+					log.Printf("[%s] 已被手动停止，停止动检 Time-Shift 缓存引擎...", cam.ID)
+				} else {
+					log.Printf("[%s] 录制时间窗结束，停止动检 Time-Shift 缓存引擎...", cam.ID)
+				}
+				harvestCancel()
+				if harvestDone != nil {
+					<-harvestDone
+				}
+				harvestCmd = nil
+				harvestDone = nil
+				harvestCancel = nil
+			}
+
+			eventShouldRecord := harvestShouldRun && harvestCmd != nil && motionDetectedRecently(cam.ID, now)
+			if eventShouldRecord && motionSession == nil {
+				motionSession = newMotionRecordSession(now)
+				log.Printf("[%s] 检测到移动，记录动检事件窗口: start=%s",
+					cam.ID, motionSession.StartTime.Format(time.RFC3339))
+			}
+
+			if harvestCmd != nil {
+				protectAfter := time.Time{}
+				if motionSession != nil {
+					protectAfter = motionSession.StartTime
+				}
+				pruneMotionTimeShiftSegments(cam.ID, protectAfter)
+			}
+
+			if !eventShouldRecord && motionSession != nil {
+				if streamState == "offline" {
+					log.Printf("[%s] 检测到流状态离线 (Offline)，结束动检事件录制...", cam.ID)
+				} else if control == "stop" {
+					log.Printf("[%s] 已被手动停止，结束动检事件录制...", cam.ID)
+				} else if !recordingWindow {
+					log.Printf("[%s] 录制时间窗结束，结束动检事件录制...", cam.ID)
+				} else {
+					log.Printf("[%s] 画面连续 %s 无变化，结束动检事件录制...", cam.ID, motionRecordIdleTimeout)
+				}
+				finishMotionRecordSession(ctx, cam, camDir, motionSession, now)
+				motionSession = nil
+			}
+
+			recordState := service.RecordStateIdle
+			if motionSession != nil {
+				recordState = service.RecordStateMotionRecording
+			} else if harvestCmd != nil {
+				recordState = service.RecordStateMotionDetecting
+			}
+			service.UpdateRecordState(cam.ID, recordState, cam.Mode, cam.RecordTime)
+		}
+	}
+}
+
+func ensureCameraDateDirs(camDir string, now time.Time) {
+	// 提前铺路，创建今天和明天的日期目录，防止跨天时目标文件夹不存在。
+	todayDir := filepath.Join(camDir, now.Format("2006-01-02"))
+	tomorrowDir := filepath.Join(camDir, now.AddDate(0, 0, 1).Format("2006-01-02"))
+	os.MkdirAll(todayDir, 0755)
+	os.MkdirAll(tomorrowDir, 0755)
+}
+
+func currentStreamState(camID string) string {
+	service.StatusMux.RLock()
+	defer service.StatusMux.RUnlock()
+	streamState := "offline"
+	if st, ok := service.StatusMap[camID]; ok {
+		streamState = st.StreamState
+	}
+	return streamState
 }
 
 // startFFmpeg 构建并启动 FFmpeg 进程
@@ -243,9 +428,6 @@ func startFFmpeg(ctx context.Context, cam constant.Camera, camDir string) *exec.
 
 // LoadOverrides 在程序启动时调用（例如 main 函数开头）
 func LoadOverrides() {
-	overrideMux.Lock()
-	defer overrideMux.Unlock()
-
 	data, err := os.ReadFile(constant.OverridesFilePath)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -255,15 +437,41 @@ func LoadOverrides() {
 		return
 	}
 
-	if err := json.Unmarshal(data, &overrides); err != nil {
+	loaded := make(map[string]string)
+	if err := json.Unmarshal(data, &loaded); err != nil {
 		log.Printf("解析手动录像指令文件失败: %v", err)
-	} else {
-		log.Printf("成功加载了 %d 个摄像头的覆盖指令", len(overrides))
+		return
 	}
+	if loaded == nil {
+		loaded = make(map[string]string)
+	}
+
+	cleaned := make(map[string]string, len(loaded))
+	for camID, action := range loaded {
+		if camID == "" {
+			continue
+		}
+		switch action {
+		case "start", "stop":
+			cleaned[camID] = action
+		case "", "auto":
+			// auto 不需要持久化。
+		default:
+			log.Printf("[%s] 忽略无效的手动录像指令: %s", camID, action)
+		}
+	}
+
+	overrideMux.Lock()
+	overrides = cleaned
+	overrideMux.Unlock()
+	log.Printf("成功加载了 %d 个摄像头的覆盖指令", len(cleaned))
 }
 
 // SaveOverrides 将当前的 overrides 写入文件
 func SaveOverrides() {
+	overrideSaveMux.Lock()
+	defer overrideSaveMux.Unlock()
+
 	overrideMux.RLock()
 	// 注意：这里用深拷贝把数据拿出来再写入，避免在进行磁盘 I/O 时长时间阻塞其他 goroutine 获取读写锁
 	mapCopy := make(map[string]string, len(overrides))
@@ -284,5 +492,27 @@ func SaveOverrides() {
 	// 写入文件
 	if err := os.WriteFile(constant.OverridesFilePath, data, 0644); err != nil {
 		log.Printf("保存手动录像指令到文件失败: %v", err)
+	}
+}
+
+func PruneOverridesForCameras(cameras []constant.Camera) {
+	validIDs := make(map[string]bool, len(cameras))
+	for _, cam := range cameras {
+		validIDs[cam.ID] = true
+	}
+
+	changed := false
+	overrideMux.Lock()
+	for camID := range overrides {
+		if !validIDs[camID] {
+			delete(overrides, camID)
+			changed = true
+			log.Printf("[%s] 已清理无效的手动录像指令", camID)
+		}
+	}
+	overrideMux.Unlock()
+
+	if changed {
+		SaveOverrides()
 	}
 }

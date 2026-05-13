@@ -6,12 +6,17 @@ let cellData = new Array(6).fill(null);
 let currentSelectedCam = null;
 let pendingAction = null;
 let compactGrid = window.innerWidth < 640;
+let selectedRecordRange = {start: '', end: ''};
+let selectedRecordPath = '';
+const maxRecordRangeDays = 7;
+const recordArchiveOpenDates = new Set();
 
 window.onload = function () {
     if (typeof DPlayer === 'undefined') {
         alert("播放器组件加载失败，请检查网络！");
         return;
     }
+    initRecordRangeControls();
     setLayout(1);
     loadStatus();
     setInterval(loadStatus, 5000);
@@ -35,8 +40,8 @@ function confirmCamAction(camId, action) {
     if (action === 'start') {
         titleEl.innerText = `强制开启录像 (CAM-${camId})`;
         descEl.innerHTML = `
-            <p class="mb-2">此操作将<b>无视配置中的时间表</b>，立刻开始录像。</p>
-            <p class="mb-2">摄像头将<b>一直保持录制状态</b>，直到您手动点击“停录”或恢复“计划”。</p>
+            <p class="mb-2">此操作将<b>无视配置中的时间表</b>，立刻启用该摄像头的录制策略。</p>
+            <p class="mb-2">系统仍会按照配置执行普通持续录制、动检录制或延时录像，直到您手动点击“停录”或恢复“计划”。</p>
             <p class="text-xs text-green-600 font-bold mt-3 border-t pt-2">⚡ 确认后稍后即生效</p>`;
         btnEl.className = "px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold shadow transition-all";
         btnEl.innerText = "确认强录";
@@ -56,7 +61,7 @@ function confirmCamAction(camId, action) {
         titleEl.innerText = `恢复自动计划 (CAM-${camId})`;
         descEl.innerHTML = `
             <p class="mb-2">解除强制状态，将摄像头的录像控制权交还给系统。</p>
-            <p class="mb-2">系统将严格按照 conf.yaml 中的 <code>record_time</code> 时间表自动启停录像。</p>
+            <p class="mb-2">系统将严格按照 conf.yaml 中的 <code>record_time</code> 时间表和该摄像头录制模式自动启停录像。</p>
             <p class="text-xs text-blue-500 font-bold mt-3 border-t pt-2">⚡ 确认后立即应用计划逻辑</p>`;
         btnEl.className = "px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow transition-all";
         btnEl.innerText = "恢复计划";
@@ -102,6 +107,12 @@ function closeConfig() {
 async function saveConfig() {
     applyMergeControlsToYaml();
     const yamlText = document.getElementById('configYaml').value;
+    const validation = await validateConfigYaml(yamlText);
+    if (!validation.ok) {
+        alert('配置格式检查失败: ' + validation.error);
+        return;
+    }
+
     const resp = await fetch('/api/config', {method: 'POST', body: yamlText});
     if (resp.ok) {
         alert('配置已生效并自动重启任务！');
@@ -110,6 +121,18 @@ async function saveConfig() {
     } else {
         const err = await resp.json();
         alert('保存失败: ' + err.error);
+    }
+}
+
+async function validateConfigYaml(yamlText) {
+    try {
+        const resp = await fetch('/api/config/validate', {method: 'POST', body: yamlText});
+        if (resp.ok) return {ok: true};
+
+        const err = await resp.json().catch(() => ({}));
+        return {ok: false, error: err.error || '配置内容不合法'};
+    } catch (e) {
+        return {ok: false, error: '无法连接配置检查接口: ' + e.message};
     }
 }
 
@@ -185,7 +208,7 @@ function appendStreamToConfig(streamId) {
         propIndent = listIndent + "  ";
     }
 
-    const newCamYaml = [`${listIndent}- id: "${streamId}"`, `${propIndent}rtsp_url: "managed_by_go2rtc"`, `${propIndent}auto_discovered: true`, `${propIndent}retention_days: 7`, `${propIndent}segment_duration: 600`, `${propIndent}format: ts`, `${propIndent}min_size_kb: 1024`, `${propIndent}record_time: "00:00-23:59"`, `${propIndent}mode: normal`].join('\n') + '\n';
+    const newCamYaml = [`${listIndent}- id: "${streamId}"`, `${propIndent}rtsp_url: "managed_by_go2rtc"`, `${propIndent}auto_discovered: true`, `${propIndent}retention_days: 7`, `${propIndent}segment_duration: 600`, `${propIndent}format: ts`, `${propIndent}min_size_kb: 1024`, `${propIndent}record_time: "00:00-23:59"`, `${propIndent}mode: normal`, `${propIndent}motion_detect: false`, `${propIndent}motionDetectRatioThreshold: 0.01`].join('\n') + '\n';
 
     if (content.trim() === '') {
         content = 'cameras:\n';
@@ -217,10 +240,13 @@ async function loadStatus() {
         list.innerHTML = '';
 
         Object.entries(data).forEach(([id, cam]) => {
-            const isRunning = cam.is_running;
+            const recordState = cam.record_state || (cam.is_running ? 'recording' : 'idle');
+            const isRunning = recordState === 'recording' || recordState === 'motion_detecting' || recordState === 'motion_recording';
             const isSelected = currentSelectedCam === id;
             const streamState = cam.stream_state || 'offline';
+            const recordSchedule = buildRecordScheduleDisplay(cam.record_time, cam.record_override);
             let streamLight, streamText;
+            let recordLight, recordText, recordTextClass;
 
             if (streamState === 'online') {
                 streamLight = 'bg-green-500 shadow-[0_0_5px_#22c55e]';
@@ -233,6 +259,24 @@ async function loadStatus() {
                 streamText = '<span class="text-[10px] text-red-500 font-bold">流断线</span>';
             }
 
+            if (recordState === 'motion_recording') {
+                recordLight = 'bg-amber-500 shadow-[0_0_5px_#f59e0b] animate-pulse';
+                recordText = '动检录制中';
+                recordTextClass = 'text-amber-700';
+            } else if (recordState === 'motion_detecting') {
+                recordLight = 'bg-sky-500 shadow-[0_0_5px_#0ea5e9]';
+                recordText = '动检中';
+                recordTextClass = 'text-sky-700';
+            } else if (recordState === 'recording') {
+                recordLight = 'bg-red-500 shadow-[0_0_5px_#ef4444] animate-pulse';
+                recordText = '录制中';
+                recordTextClass = 'text-gray-700';
+            } else {
+                recordLight = 'bg-gray-300';
+                recordText = '未录像';
+                recordTextClass = 'text-gray-400';
+            }
+
             const item = document.createElement('div');
             item.className = `p-3 rounded-xl border cursor-pointer transition-all flex flex-col group ${isSelected ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-100' : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-sm'} ${isRunning ? '' : 'opacity-80'}`;
             item.onclick = () => selectCamera(id);
@@ -240,14 +284,14 @@ async function loadStatus() {
             item.innerHTML = `
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center">
-                        <div class="flex flex-col mr-3 space-y-1.5 border-r border-gray-100 pr-3 min-w-[65px]">
+                        <div class="flex flex-col mr-3 space-y-1.5 border-r border-gray-100 pr-3 min-w-[78px]">
                             <div class="flex items-center" title="摄像机实时流状态">
                                 <div class="w-2 h-2 rounded-full ${streamLight} mr-1.5 shrink-0"></div>
                                 ${streamText}
                             </div>
                             <div class="flex items-center" title="本地录制状态">
-                                <div class="w-2 h-2 rounded-full ${isRunning ? 'bg-red-500 shadow-[0_0_5px_#ef4444] animate-pulse' : 'bg-gray-300'} mr-1.5 shrink-0"></div>
-                                <span class="text-[10px] ${isRunning ? 'text-gray-700' : 'text-gray-400'} font-bold">${isRunning ? '录制中' : '未录像'}</span>
+                                <div class="w-2 h-2 rounded-full ${recordLight} mr-1.5 shrink-0"></div>
+                                <span class="text-[10px] ${recordTextClass} font-bold">${recordText}</span>
                             </div>
                         </div>
                         <div class="flex flex-col">
@@ -258,6 +302,16 @@ async function loadStatus() {
                     <button onclick="event.stopPropagation(); previewLive('${id}')"
                             class="w-8 h-8 flex items-center justify-center rounded bg-blue-600 hover:bg-blue-700 text-white shadow transition-colors"
                             title="主动拉流直播">▶</button>
+                </div>
+
+                <div class="flex min-w-0 items-center gap-1.5 rounded-lg border ${recordSchedule.borderClass} ${recordSchedule.bgClass} px-2 py-1.5"
+                     title="${escapeHtml(recordSchedule.title)}">
+                    <svg class="h-3.5 w-3.5 shrink-0 ${recordSchedule.iconClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2"></path>
+                        <circle cx="12" cy="12" r="9"></circle>
+                    </svg>
+                    <span class="shrink-0 text-[10px] font-bold ${recordSchedule.badgeClass}">${recordSchedule.badge}</span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-semibold ${recordSchedule.textClass}">${escapeHtml(recordSchedule.text)}</span>
                 </div>
 
                 <div class="flex justify-between items-center border-t border-gray-100 pt-2.5 mt-2">
@@ -288,10 +342,204 @@ async function loadStatus() {
     }
 }
 
+function buildRecordScheduleDisplay(recordTime, override) {
+    const rawValue = String(recordTime || '').trim();
+    const ranges = parseRecordTimeRanges(rawValue);
+    const hasValidRanges = ranges.length > 0;
+    const overrideState = normalizeRecordOverride(override);
+
+    if (!rawValue) {
+        const base = {
+            badge: '全天',
+            text: '未配置，按全天录制',
+            title: '录制计划: 未配置，系统按全天录制'
+        };
+        return applyRecordOverrideDisplay(base, overrideState, 'full');
+    }
+
+    if (!hasValidRanges) {
+        const base = {
+            badge: '缺省',
+            text: '按全天录制',
+            title: `录制计划: ${rawValue} (未识别，系统按全天录制)`
+        };
+        return applyRecordOverrideDisplay(base, overrideState, 'fallback');
+    }
+
+    const text = ranges.map(formatRecordRangeText).join(' / ');
+    const fullDay = isFullDayRecordSchedule(ranges);
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const inSchedule = fullDay || ranges.some(range => isMinuteInRecordRange(nowMinutes, range.start, range.end));
+
+    if (fullDay) {
+        const base = {
+            badge: '全天',
+            text: '全天录制',
+            title: `录制计划: ${text}`
+        };
+        return applyRecordOverrideDisplay(base, overrideState, 'full');
+    }
+
+    const base = {
+        badge: inSchedule ? '计划内' : '计划外',
+        text,
+        title: `录制计划: ${text}，当前${inSchedule ? '在' : '不在'}计划时间内`
+    };
+    return applyRecordOverrideDisplay(base, overrideState, inSchedule ? 'active' : 'inactive');
+}
+
+function applyRecordOverrideDisplay(base, overrideState, scheduleState) {
+    if (overrideState === 'start') {
+        return {
+            badge: '强制录',
+            text: formatScheduleTextWithState(base),
+            title: `${base.title}。当前手动覆盖: 强制录制，record_time 不会限制启动`,
+            ...recordScheduleClasses('forced-start')
+        };
+    }
+
+    if (overrideState === 'stop') {
+        return {
+            badge: '强制停',
+            text: formatScheduleTextWithState(base),
+            title: `${base.title}。当前手动覆盖: 强制停止，即使在计划内也不会录像`,
+            ...recordScheduleClasses('forced-stop')
+        };
+    }
+
+    return {
+        badge: '自动',
+        text: formatScheduleTextWithState(base),
+        title: `${base.title}。当前手动覆盖: 自动计划`,
+        ...recordScheduleClasses(scheduleState)
+    };
+}
+
+function formatScheduleTextWithState(base) {
+    if (base.badge === '全天') return base.text;
+    return `${base.badge} · ${base.text}`;
+}
+
+function recordScheduleClasses(state) {
+    if (state === 'forced-start') {
+        return {
+            bgClass: 'bg-emerald-50/80',
+            borderClass: 'border-emerald-200',
+            iconClass: 'text-emerald-600',
+            badgeClass: 'text-emerald-700',
+            textClass: 'text-slate-600'
+        };
+    }
+
+    if (state === 'forced-stop') {
+        return {
+            bgClass: 'bg-rose-50/80',
+            borderClass: 'border-rose-200',
+            iconClass: 'text-rose-500',
+            badgeClass: 'text-rose-700',
+            textClass: 'text-rose-700'
+        };
+    }
+
+    if (state === 'full' || state === 'active') {
+        return {
+            bgClass: 'bg-emerald-50/70',
+            borderClass: 'border-emerald-100',
+            iconClass: 'text-emerald-500',
+            badgeClass: 'text-emerald-700',
+            textClass: 'text-slate-600'
+        };
+    }
+
+    if (state === 'fallback') {
+        return {
+            bgClass: 'bg-amber-50/70',
+            borderClass: 'border-amber-100',
+            iconClass: 'text-amber-500',
+            badgeClass: 'text-amber-700',
+            textClass: 'text-amber-700'
+        };
+    }
+
+    return {
+        bgClass: 'bg-slate-50',
+        borderClass: 'border-slate-200',
+        iconClass: 'text-slate-400',
+        badgeClass: 'text-slate-500',
+        textClass: 'text-slate-500'
+    };
+}
+
+function normalizeRecordOverride(override) {
+    const value = String(override || '').trim().toLowerCase();
+    return value === 'start' || value === 'stop' ? value : 'auto';
+}
+
+function parseRecordTimeRanges(recordTime) {
+    return String(recordTime || '')
+        .split(/[,;，；\n\r]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map(item => {
+            const parts = item.split('-').map(part => part.trim());
+            if (parts.length !== 2) return null;
+
+            const start = parseClockMinutes(parts[0]);
+            const end = parseClockMinutes(parts[1]);
+            if (start === null || end === null) return null;
+
+            return {start, end};
+        })
+        .filter(Boolean);
+}
+
+function parseClockMinutes(clock) {
+    const match = String(clock || '').match(/^(\d{1,2}):([0-5]\d)$/);
+    if (!match) return null;
+
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour < 0 || hour > 24 || (hour === 24 && minute !== 0)) return null;
+
+    return hour * 60 + minute;
+}
+
+function isMinuteInRecordRange(minute, start, end) {
+    if (start <= end) return minute >= start && minute <= end;
+    return minute >= start || minute <= end;
+}
+
+function isFullDayRecordSchedule(ranges) {
+    return ranges.some(range => range.start === 0 && range.end >= 1439);
+}
+
+function formatRecordRangeText(range) {
+    return `${formatClockText(range.start)}-${formatClockText(range.end)}`;
+}
+
+function formatClockText(minutes) {
+    if (minutes === 1440) return '24:00';
+    const hour = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    })[char]);
+}
+
 // --- 宫格矩阵与播放逻辑 ---
 function setLayout(layoutCount) {
     currentLayout = layoutCount;
     if (activeCell >= layoutCount) activeCell = 0;
+    syncSelectedRecordFromActiveCell();
 
     [1, 4, 6].forEach(num => {
         const btn = document.getElementById(`btn-layout-${num}`);
@@ -314,9 +562,15 @@ function renderGrid() {
 
     for (let i = 0; i < currentLayout; i++) {
         const isFocused = i === activeCell;
+        const cellFocusClass = currentLayout === 1
+            ? 'border-gray-800'
+            : (isFocused ? 'border-blue-500 shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]' : 'border-gray-800 hover:border-gray-600');
+        const liveIframeClass = currentLayout === 1
+            ? 'w-full h-full border-0 hidden'
+            : 'w-full h-full border-0 hidden pointer-events-none';
         const cellHtml = `
-            <div id="cell-${i}" onclick="setActiveCell(${i})" ondblclick="toggleCellFullscreen(${i})" class="relative w-full h-full bg-gray-900 border-[2px] transition-colors overflow-hidden group cursor-pointer ${isFocused ? 'border-blue-500 shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]' : 'border-gray-800 hover:border-gray-600'}">
-                <iframe id="live-iframe-${i}" class="w-full h-full border-0 hidden pointer-events-none" allow="autoplay; fullscreen; microphone; camera"></iframe>
+            <div id="cell-${i}" onclick="setActiveCell(${i})" ondblclick="toggleCellFullscreen(${i})" class="relative w-full h-full bg-gray-900 border-[2px] transition-colors overflow-hidden group cursor-pointer ${cellFocusClass}">
+                <iframe id="live-iframe-${i}" class="${liveIframeClass}" allow="autoplay; fullscreen; microphone; camera"></iframe>
                 <div id="dplayer-${i}" class="w-full h-full hidden"></div>
                 <video id="native-player-${i}" class="w-full h-full object-contain hidden bg-black" playsinline controls></video>
                 <div id="empty-state-${i}" class="absolute inset-0 flex flex-col items-center justify-center text-gray-700 pointer-events-none group-hover:text-gray-500 transition-colors">
@@ -349,6 +603,9 @@ function closeActiveCell() {
 function clearCell(index) {
     stopCellPlayback(index);
     cellData[index] = null;
+    if (index === activeCell) {
+        syncSelectedRecordFromActiveCell();
+    }
 
     const liveIframe = document.getElementById(`live-iframe-${index}`);
     const dplayerContainer = document.getElementById(`dplayer-${index}`);
@@ -396,6 +653,7 @@ function stopCellPlayback(index) {
 
 function setActiveCell(index) {
     activeCell = index;
+    syncSelectedRecordFromActiveCell();
     updateFocusUI();
 }
 
@@ -403,7 +661,10 @@ function updateFocusUI() {
     for (let i = 0; i < currentLayout; i++) {
         const cell = document.getElementById(`cell-${i}`);
         if (cell) {
-            if (i === activeCell) {
+            if (currentLayout === 1) {
+                cell.classList.remove('border-blue-500', 'shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]', 'hover:border-gray-600');
+                cell.classList.add('border-gray-800');
+            } else if (i === activeCell) {
                 cell.classList.add('border-blue-500', 'shadow-[inset_0_0_20px_rgba(59,130,246,0.3)]');
                 cell.classList.remove('border-gray-800');
             } else {
@@ -431,6 +692,9 @@ function previewLive(camId) {
 
 function playVideo(source, isLive, title) {
     cellData[activeCell] = {source, isLive, title};
+    if (isLive) {
+        setSelectedRecordPath('');
+    }
     executePlayInCell(activeCell, source, isLive, title);
 
     if (isLive && currentLayout > 1) {
@@ -441,14 +705,51 @@ function playVideo(source, isLive, title) {
     }
 }
 
+function getRecordPath(file) {
+    return String((file && (file.path || file.url || file.name)) || '').trim();
+}
+
+function setSelectedRecordPath(path) {
+    selectedRecordPath = String(path || '').trim();
+    applySelectedRecordCardStyles();
+}
+
+function syncSelectedRecordFromActiveCell() {
+    const activeData = cellData[activeCell];
+    const path = activeData && !activeData.isLive ? activeData.recordPath : '';
+    setSelectedRecordPath(path || '');
+}
+
+function applySelectedRecordCardStyles() {
+    document.querySelectorAll('[data-record-path]').forEach(item => {
+        setRecordItemSelected(item, selectedRecordPath !== '' && item.dataset.recordPath === selectedRecordPath);
+    });
+}
+
+function setRecordItemSelected(item, isSelected) {
+    item.classList.toggle('border-slate-200', !isSelected);
+    item.classList.toggle('bg-white', !isSelected);
+    item.classList.toggle('border-emerald-400', isSelected);
+    item.classList.toggle('bg-emerald-50/70', isSelected);
+    item.classList.toggle('ring-2', isSelected);
+    item.classList.toggle('ring-emerald-200/70', isSelected);
+    item.classList.toggle('shadow-[0_8px_20px_-12px_rgba(16,185,129,0.7)]', isSelected);
+    item.setAttribute('aria-current', isSelected ? 'true' : 'false');
+
+    const indicator = item.querySelector('[data-record-playing]');
+    if (indicator) indicator.classList.toggle('hidden', !isSelected);
+}
+
 async function playRecord(file, title) {
     const targetCell = activeCell;
-    showProbeLoadingInCell(targetCell, title);
+    const recordPath = getRecordPath(file);
+    setSelectedRecordPath(recordPath);
+    showProbeLoadingInCell(targetCell, title, recordPath);
 
     try {
         // 1. 合并后的完美大 MP4：所有设备直接走原生秒开播放
         if (file.name.toLowerCase().endsWith('.mp4') && file.name.includes('_merged')) {
-            cellData[targetCell] = {source: file.url, isLive: false, title};
+            cellData[targetCell] = {source: file.url, isLive: false, title, recordPath};
             // 传入 true，强制使用原生的 <video> 标签播放 mp4
             executePlayInCell(targetCell, file.url, false, title, true);
             updateFocusUI();
@@ -467,7 +768,7 @@ async function playRecord(file, title) {
             if (isAppleNative || !supportHEVC) {
                 // 直接拦截并抛出不支持的 UI 提示，不再走转码逻辑
                 stopCellPlayback(targetCell);
-                cellData[targetCell] = {source: '', isLive: false, title: `${title} · 播放受限`};
+                cellData[targetCell] = {source: '', isLive: false, title: `${title} · 播放受限`, recordPath};
 
                 const emptyState = document.getElementById(`empty-state-${targetCell}`);
                 const label = document.getElementById(`label-${targetCell}`);
@@ -499,10 +800,10 @@ async function playRecord(file, title) {
 
             // 设备支持 H.265 时，强制走 fMP4 重封装！
             const remuxUrl = `/play_remux/${encodeURI(file.path)}`;
-            cellData[targetCell] = {source: remuxUrl, isLive: false, title};
+            cellData[targetCell] = {source: remuxUrl, isLive: false, title, recordPath};
 
             // 传 true 强制使用原生的 <video> 标签播放 mp4 流
-            const warningMsg = "流式播放：当前片段暂不支持进度条拖拽";
+            const warningMsg = "当前为H.265片段的实时重封装播放，浏览器内暂不支持拖拽定位；需要快进回看时，优先选择自动合并后的MP4，或下载后用VLC、PotPlayer、IINA等播放器打开。";
             executePlayInCell(targetCell, remuxUrl, false, title, true, warningMsg);
             updateFocusUI();
             return; // 直接返回，拦截默认的 TS 播放逻辑
@@ -512,7 +813,7 @@ async function playRecord(file, title) {
     }
 
     // 非 H.265 的 .ts 碎片，走默认播放逻辑 (HLS 或 mpegts)
-    cellData[targetCell] = {source: file.url, isLive: false, title};
+    cellData[targetCell] = {source: file.url, isLive: false, title, recordPath};
     // 不强制使用原生播放器
     executePlayInCell(targetCell, file.url, false, title, false);
     updateFocusUI();
@@ -541,9 +842,9 @@ function isMobilePlayback() {
     return window.matchMedia('(max-width: 767px), (pointer: coarse)').matches;
 }
 
-function showProbeLoadingInCell(index, title) {
+function showProbeLoadingInCell(index, title, recordPath = '') {
     stopCellPlayback(index);
-    cellData[index] = {source: '', isLive: false, title: `检测编码: ${title}`};
+    cellData[index] = {source: '', isLive: false, title: `检测编码: ${title}`, recordPath};
 
     const liveIframe = document.getElementById(`live-iframe-${index}`);
     const dplayerContainer = document.getElementById(`dplayer-${index}`);
@@ -707,7 +1008,7 @@ function executePlayInCell(index, source, isLive, title, forceNative = false, wa
         dplayerContainer.classList.add('hidden');
         nativePlayer.classList.add('hidden');
         liveIframe.classList.remove('hidden');
-        liveIframe.src = `/stream.html?src=${source}`;
+        liveIframe.src = `/stream.html?src=${encodeURIComponent(source)}`;
     } else {
         liveIframe.classList.add('hidden');
         liveIframe.src = '';
@@ -762,89 +1063,396 @@ function resetEmptyState(index) {
 }
 
 // --- 历史录像逻辑 ---
+function initRecordRangeControls() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    startInput.addEventListener('change', syncRecordRangeLimits);
+    endInput.addEventListener('change', syncRecordRangeLimits);
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+}
+
+function syncRecordRangeLimits() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    const todayKey = formatDateKey(new Date());
+    startInput.removeAttribute('min');
+    endInput.removeAttribute('min');
+    startInput.max = todayKey;
+    endInput.max = todayKey;
+
+    const startDate = parseLocalDate(startInput.value);
+    const endDate = parseLocalDate(endInput.value);
+
+    if (startDate) {
+        endInput.min = startInput.value;
+        const maxEndKey = formatDateKey(addDays(startDate, maxRecordRangeDays - 1));
+        endInput.max = minDateKey(maxEndKey, todayKey);
+    }
+    if (endDate) {
+        const minStartKey = formatDateKey(addDays(endDate, -(maxRecordRangeDays - 1)));
+        startInput.min = minStartKey;
+        startInput.max = minDateKey(endInput.value, todayKey);
+    }
+}
+
+function applyRecordRange() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    if (!startInput || !endInput) return;
+
+    const start = startInput.value;
+    const end = endInput.value;
+    const validationError = validateRecordRange(start, end);
+    if (validationError) {
+        alert(validationError);
+        return;
+    }
+
+    selectedRecordRange = {start, end};
+    recordArchiveOpenDates.clear();
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+    if (currentSelectedCam) {
+        loadRecords(currentSelectedCam);
+    } else {
+        alert('请先选择摄像头');
+    }
+}
+
+function resetRecordRange() {
+    const startInput = document.getElementById('recordStartDate');
+    const endInput = document.getElementById('recordEndDate');
+    selectedRecordRange = {start: '', end: ''};
+    recordArchiveOpenDates.clear();
+
+    if (startInput) startInput.value = '';
+    if (endInput) endInput.value = '';
+    syncRecordRangeLimits();
+    updateRecordRangeStatus();
+
+    if (currentSelectedCam) {
+        loadRecords(currentSelectedCam);
+    }
+}
+
+function validateRecordRange(start, end) {
+    if (!start || !end) return '请选择起止日期';
+
+    const startDate = parseLocalDate(start);
+    const endDate = parseLocalDate(end);
+    if (!startDate || !endDate) return '日期格式有误';
+    if (endDate < startDate) return '结束日期不能早于开始日期';
+    if (recordRangeDaySpan(start, end) > maxRecordRangeDays) {
+        return `日期范围最多支持连续 ${maxRecordRangeDays} 天`;
+    }
+    return '';
+}
+
+function updateRecordRangeStatus() {
+    const status = document.getElementById('recordRangeStatus');
+    if (!status) return;
+    if (selectedRecordRange.start && selectedRecordRange.end) {
+        status.innerText = selectedRecordRange.start === selectedRecordRange.end
+            ? selectedRecordRange.start
+            : `${selectedRecordRange.start} 至 ${selectedRecordRange.end}`;
+    } else {
+        status.innerText = '最近7个录像日';
+    }
+}
+
+function buildRecordsUrl(camId) {
+    const params = new URLSearchParams();
+    if (selectedRecordRange.start && selectedRecordRange.end) {
+        params.set('start', selectedRecordRange.start);
+        params.set('end', selectedRecordRange.end);
+    }
+    const query = params.toString();
+    return `/api/records/${encodeURIComponent(camId)}${query ? `?${query}` : ''}`;
+}
+
+function addDays(date, days) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+}
+
+function minDateKey(a, b) {
+    return a <= b ? a : b;
+}
+
+function recordRangeDaySpan(start, end) {
+    const startUTC = dateKeyToUTC(start);
+    const endUTC = dateKeyToUTC(end);
+    return Math.floor((endUTC - startUTC) / 86400000) + 1;
+}
+
+function dateKeyToUTC(dateKey) {
+    const parts = dateKey.split('-').map(Number);
+    return Date.UTC(parts[0], parts[1] - 1, parts[2]);
+}
+
 async function loadRecords(camId) {
     const list = document.getElementById('recordList');
     const countBadge = document.getElementById('recordCount');
-    list.innerHTML = '<div class="col-span-full text-center py-10 text-gray-400">检索中...</div>';
+    updateRecordRangeStatus();
+    list.className = 'space-y-4';
+    list.innerHTML = `
+        <div class="rounded-xl border border-slate-200 bg-white px-5 py-10 text-center text-sm font-medium text-slate-400 shadow-sm">
+            正在检索历史录像...
+        </div>
+    `;
 
     try {
-        const resp = await fetch(`/api/records/${camId}`);
+        const resp = await fetch(buildRecordsUrl(camId));
+        if (!resp.ok) {
+            let message = '获取录像列表失败';
+            try {
+                const err = await resp.json();
+                if (err && err.error) message = err.error;
+            } catch (_) {
+            }
+            throw new Error(message);
+        }
         const files = await resp.json();
         list.innerHTML = '';
 
         if (!files || files.length === 0) {
             countBadge.innerText = '0 个文件';
-            list.innerHTML = '<div class="col-span-full text-center py-12 text-gray-400">该设备暂无历史录像</div>';
+            const emptyTitle = selectedRecordRange.start && selectedRecordRange.end ? '该日期范围暂无录像' : '该设备暂无历史录像';
+            list.innerHTML = `
+                <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-14 text-center">
+                    <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-slate-300 shadow-sm">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                        </svg>
+                    </div>
+                    <div class="text-sm font-bold text-slate-500">${emptyTitle}</div>
+                </div>
+            `;
             return;
         }
 
-        countBadge.innerText = `${files.length} 个文件`;
-        const groups = {};
-        files.forEach(file => {
-            const match = file.name.match(/\d{4}-\d{2}-\d{2}/);
-            const dateStr = match ? match[0] : '其他归档';
-            if (!groups[dateStr]) groups[dateStr] = [];
-            groups[dateStr].push(file);
-        });
+        const groups = groupRecordsByDate(files);
+        const totalBytes = files.reduce((sum, file) => sum + parseRecordSizeBytes(file.size), 0);
+        countBadge.innerText = `${files.length} 个文件 · ${formatRecordSize(totalBytes)}`;
 
         const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+        const hasOpenDate = sortedDates.some(date => recordArchiveOpenDates.has(`${camId}:${date}`));
         sortedDates.forEach((date, index) => {
-            const dateFiles = groups[date];
-            dateFiles.sort((a, b) => b.name.localeCompare(a.name));
-            const groupId = `date-${index}`;
-            const isFirst = index === 0;
-            const groupDiv = document.createElement('div');
-            groupDiv.className = 'flex flex-col bg-gray-50 border border-gray-200 rounded-xl overflow-hidden shadow-sm';
+            const entries = groups[date].sort((a, b) => b.meta.sortKey.localeCompare(a.meta.sortKey));
+            const groupKey = `${camId}:${date}`;
+            const isOpen = recordArchiveOpenDates.has(groupKey) || (index === 0 && !hasOpenDate);
+            if (isOpen) recordArchiveOpenDates.add(groupKey);
 
-            const header = document.createElement('div');
-            header.className = 'flex justify-between items-center p-3.5 bg-white border-b border-gray-200 cursor-pointer hover:bg-blue-50 transition-colors select-none';
-            header.onclick = () => {
-                document.getElementById(`content-${groupId}`).classList.toggle('hidden');
-                document.getElementById(`icon-${groupId}`).classList.toggle('rotate-90');
-            };
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md';
+
+            const header = document.createElement('button');
+            header.type = 'button';
+            header.className = 'flex w-full items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5 text-left transition-colors hover:bg-slate-50';
+
+            const dateBytes = entries.reduce((sum, entry) => sum + parseRecordSizeBytes(entry.file.size), 0);
             header.innerHTML = `
-                <div class="flex items-center">
-                    <span class="text-sm font-bold text-gray-700">${date}</span>
-                    <span class="ml-2 text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">${dateFiles.length}</span>
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-sm font-extrabold tracking-tight text-slate-800">${archiveDateTitle(date)}</span>
+                        <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600 ring-1 ring-blue-100">${entries.length} 段</span>
+                    </div>
+                    <div class="mt-1 text-[11px] font-medium text-slate-400">${archiveDateSubTitle(date)} · ${formatRecordSize(dateBytes)}</div>
                 </div>
-                <svg id="icon-${groupId}" class="w-4 h-4 text-gray-400 transition-transform ${isFirst ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                <svg class="h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
             `;
 
             const content = document.createElement('div');
-            content.id = `content-${groupId}`;
-            content.className = `flex flex-col space-y-1 p-2 max-h-[300px] overflow-y-auto custom-scrollbar ${isFirst ? '' : 'hidden'}`;
+            content.className = `${isOpen ? '' : 'hidden'} max-h-[420px] overflow-y-auto bg-slate-50/60 p-2.5 custom-scrollbar sm:max-h-[520px]`;
 
-            dateFiles.forEach(file => {
-                const timeMatch = file.name.match(/\d{2}-\d{2}-\d{2}\.(ts|mp4)$/);
-                let timeDisplay = timeMatch ? timeMatch[0].replace(/\.(ts|mp4)$/, '').replace(/-/g, ':') : file.name;
-                const ext = file.name.split('.').pop().toUpperCase();
-                const item = document.createElement('div');
-                item.className = 'flex justify-between items-center p-2.5 text-xs rounded-lg bg-white border border-gray-100 hover:border-blue-400 hover:text-blue-600 cursor-pointer transition-all shadow-sm group';
-                item.onclick = () => {
-                    playRecord(file, `🎬 回放: ${camId} (${timeDisplay})`);
-                };
-                item.innerHTML = `
-                <div class="flex items-center">
-                    <span class="mr-2">🎬</span>
-                    <span class="font-mono font-bold">${timeDisplay}</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-[10px] text-gray-400 font-mono">${file.size}</span>
-                    <span class="text-[9px] px-1 bg-gray-50 text-gray-400 rounded border border-gray-100 font-bold">${ext}</span>
-                    <button onclick="deleteRecord(event, '${camId}', '${file.path}')" class="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity px-1" title="永久删除该录像">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                </div>
-            `;
-                content.appendChild(item);
+            const fileGrid = document.createElement('div');
+            fileGrid.className = 'grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3';
+
+            entries.forEach(entry => {
+                fileGrid.appendChild(createRecordItem(camId, entry.file, entry.meta));
             });
+
+            content.appendChild(fileGrid);
+            header.onclick = () => {
+                const nextOpen = content.classList.toggle('hidden') === false;
+                header.querySelector('svg').classList.toggle('rotate-90', nextOpen);
+                if (nextOpen) {
+                    recordArchiveOpenDates.add(groupKey);
+                } else {
+                    recordArchiveOpenDates.delete(groupKey);
+                }
+            };
+
             groupDiv.appendChild(header);
             groupDiv.appendChild(content);
             list.appendChild(groupDiv);
         });
+        applySelectedRecordCardStyles();
     } catch (e) {
-        list.innerHTML = '<div class="col-span-full text-center py-10 text-red-400">获取录像列表失败</div>';
+        countBadge.innerText = '加载失败';
+        list.innerHTML = '';
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'rounded-xl border border-red-100 bg-red-50 px-5 py-10 text-center text-sm font-bold text-red-400';
+        errorDiv.textContent = e.message || '获取录像列表失败';
+        list.appendChild(errorDiv);
     }
+}
+
+function groupRecordsByDate(files) {
+    return files.reduce((groups, file) => {
+        const meta = parseRecordMeta(file);
+        if (!groups[meta.date]) groups[meta.date] = [];
+        groups[meta.date].push({file, meta});
+        return groups;
+    }, {});
+}
+
+function parseRecordMeta(file) {
+    const name = file.name || '';
+    const path = file.path || name;
+    const dateMatch = path.match(/\d{4}-\d{2}-\d{2}/);
+    const date = dateMatch ? dateMatch[0] : '其他归档';
+    const compactTimeMatch = name.match(/_(\d{2})(\d{2})(\d{2})(?:_|\.|$)/);
+    const dashedTimeMatch = name.match(/_(\d{2})-(\d{2})-(\d{2})(?:_|\.|$)/);
+    const timeParts = compactTimeMatch || dashedTimeMatch;
+    const ext = (name.split('.').pop() || '').toUpperCase();
+    const isMotion = /_motion\./i.test(name);
+    const isMerged = /_merged\./i.test(name);
+    const timeDisplay = isMerged ? name : (timeParts ? `${timeParts[1]}:${timeParts[2]}:${timeParts[3]}` : '整段录像');
+    const sortKey = timeParts ? `${timeParts[1]}${timeParts[2]}${timeParts[3]}_${name}` : name;
+    const kind = isMotion ? '动检' : isMerged ? '合并' : '切片';
+    const kindClass = isMotion
+        ? 'bg-amber-50 text-amber-700 ring-amber-100'
+        : isMerged
+            ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+            : 'bg-slate-100 text-slate-500 ring-slate-200';
+    const iconClass = isMotion
+        ? 'bg-amber-50 text-amber-600 ring-amber-100'
+        : isMerged
+            ? 'bg-emerald-50 text-emerald-600 ring-emerald-100'
+            : 'bg-blue-50 text-blue-600 ring-blue-100';
+
+    return {date, timeDisplay, sortKey, ext, kind, kindClass, iconClass};
+}
+
+function createRecordItem(camId, file, meta) {
+    const item = document.createElement('div');
+    const recordPath = getRecordPath(file);
+    item.className = 'group flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md active:translate-y-0';
+    item.dataset.recordPath = recordPath;
+    item.onclick = () => playRecord(file, `回放: ${camId} (${meta.timeDisplay})`);
+
+    item.innerHTML = `
+        <div class="flex min-w-0 items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1 shadow-sm ${meta.iconClass}">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 3.75h7.25L19 8.5V18.5A1.75 1.75 0 0117.25 20.25H7A1.75 1.75 0 015.25 18.5v-13A1.75 1.75 0 017 3.75z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M14.25 3.75V8.5H19"></path>
+                    <path fill="currentColor" stroke="none" d="M10.25 11.05a.55.55 0 01.83-.47l3.35 2.02a.55.55 0 010 .94l-3.35 2.02a.55.55 0 01-.83-.47v-4.04z"></path>
+                </svg>
+            </div>
+            <div class="min-w-0">
+                <div class="font-mono text-sm font-extrabold leading-5 text-slate-800">${meta.timeDisplay}</div>
+                <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <span class="rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${meta.kindClass}">${meta.kind}</span>
+                    <span data-record-playing class="hidden rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">播放中</span>
+                    <span class="font-mono text-[10px] font-medium text-slate-400">${meta.ext}</span>
+                    <span class="font-mono text-[10px] font-medium text-slate-400">${file.size}</span>
+                </div>
+            </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+            <button data-record-action="download" class="rounded-md p-2 text-slate-300 transition-colors hover:bg-blue-50 hover:text-blue-600" title="下载该录像">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M8 12l4 4m0 0l4-4m-4 4V4"></path>
+                </svg>
+            </button>
+            <button data-record-action="delete" class="rounded-md p-2 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500" title="永久删除该录像">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                </svg>
+            </button>
+        </div>
+    `;
+
+    const downloadBtn = item.querySelector('[data-record-action="download"]');
+    const deleteBtn = item.querySelector('[data-record-action="delete"]');
+    downloadBtn.onclick = (event) => downloadRecord(event, file.path);
+    deleteBtn.onclick = (event) => deleteRecord(event, camId, file.path);
+    setRecordItemSelected(item, selectedRecordPath !== '' && selectedRecordPath === recordPath);
+    return item;
+}
+
+function archiveDateTitle(date) {
+    if (date === '其他归档') return date;
+    const today = new Date();
+    const current = parseLocalDate(date);
+    if (!current) return date;
+    const todayKey = formatDateKey(today);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date === todayKey) return `${date} · 今天`;
+    if (date === formatDateKey(yesterday)) return `${date} · 昨天`;
+    return date;
+}
+
+function archiveDateSubTitle(date) {
+    if (date === '其他归档') return '未识别日期';
+    const current = parseLocalDate(date);
+    if (!current) return '录像归档';
+    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    return weekdays[current.getDay()];
+}
+
+function parseLocalDate(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    const parts = date.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+    const parsed = new Date(parts[0], parts[1] - 1, parts[2]);
+    if (formatDateKey(parsed) !== date) return null;
+    return parsed;
+}
+
+function formatDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function parseRecordSizeBytes(sizeText) {
+    const match = String(sizeText || '').match(/([\d.]+)\s*(KB|MB|GB)/i);
+    if (!match) return 0;
+    const value = Number(match[1]);
+    const unit = match[2].toUpperCase();
+    if (Number.isNaN(value)) return 0;
+    if (unit === 'GB') return value * 1024 * 1024 * 1024;
+    if (unit === 'MB') return value * 1024 * 1024;
+    return value * 1024;
+}
+
+function formatRecordSize(bytes) {
+    if (!bytes) return '0 MB';
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function downloadRecord(e, filePath) {
+    e.stopPropagation();
+    const link = document.createElement('a');
+    link.href = `/api/record/download?path=${encodeURIComponent(filePath)}`;
+    link.download = filePath.split('/').pop() || 'record';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
 }
 
 async function deleteRecord(e, camId, filePath) {

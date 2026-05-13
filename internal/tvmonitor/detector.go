@@ -71,7 +71,7 @@ func (d *Detector) TVState(frame gocv.Mat) bool {
 	defer meanDev.Close()
 	gocv.MeanStdDev(diff, &meanDev, &stdDev)
 
-	frameDiff := stdDev.GetFloatAt(0, 0)
+	frameDiff := float64(stdDev.GetFloatAt(0, 0))
 	tvOn = tvOn && frameDiff > d.config.FrameDiffThreshold
 
 	d.prevGray.Close()

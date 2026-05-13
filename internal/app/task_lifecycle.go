@@ -30,6 +30,11 @@ func startTasks() {
 	for _, cam := range cams {
 		taskWg.Add(1)
 		go task.CameraTask(ctx, &taskWg, cam)
+
+		if cam.MotionDetect && (cam.Mode == "" || cam.Mode == "normal") {
+			taskWg.Add(1)
+			go task.MotionDetectTask(ctx, &taskWg, cam)
+		}
 	}
 
 	// Start TV monitors
@@ -76,6 +81,7 @@ func restartTasks(newConfig constant.Config) {
 
 	// 4. 【新增】清理内存中被删除的“幽灵”摄像头状态
 	cleanGhostStatus(newConfig)
+	task.PruneOverridesForCameras(newConfig.Cameras)
 
 	// 5. 启动新任务
 	startTasks()

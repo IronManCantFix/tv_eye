@@ -23,10 +23,12 @@ func startWebServer() {
 	r.GET("/", handleIndex)
 	r.GET("/api/status", handleStatus)
 	r.GET("/api/config", handleGetConfig)
+	r.POST("/api/config/validate", handleValidateConfig)
 	r.POST("/api/config", handleSaveConfig)
 	r.POST("/api/camera/:id/:action", handleCameraAction)
 	r.GET("/api/records/:id", handleRecords)
 	r.GET("/api/record/probe", handleProbeRecord)
+	r.GET("/api/record/download", handleDownloadRecord)
 	r.DELETE("/api/record", handleDeleteRecord)
 	r.GET("/api/go2rtc/unmanaged", handleUnmanagedStreams)
 
