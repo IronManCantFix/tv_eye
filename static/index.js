@@ -1603,6 +1603,9 @@ async function loadTVMonitorStatus() {
                         <p class="text-xs leading-relaxed">${s.message || '等待配置...'}</p>
                     </div>`;
             } else {
+                const tvOnDot = s.tv_on
+                    ? '<div class="w-2 h-2 rounded-full bg-purple-500 animate-pulse shadow-[0_0_5px_#a855f7] mr-1.5 shrink-0" title="电视开启"></div>'
+                    : '<div class="w-2 h-2 rounded-full bg-gray-300 mr-1.5 shrink-0" title="电视关闭"></div>';
                 const dailyPercent = Math.min((s.daily_minutes / s.max_daily_mins) * 100, 100);
                 const dailyColor = dailyPercent > 80 ? 'bg-red-500' : dailyPercent > 50 ? 'bg-amber-400' : 'bg-green-500';
 
@@ -1626,6 +1629,7 @@ async function loadTVMonitorStatus() {
                     <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center">
                             <div class="w-2.5 h-2.5 rounded-full ${dotClass} mr-2"></div>
+                            ${tvOnDot}
                             <span class="font-bold text-sm">${s.camera_id}</span>
                         </div>
                         <span class="text-xs font-bold px-2 py-0.5 rounded-full border ${colorClass}">${label}</span>
@@ -1661,10 +1665,16 @@ async function loadTVMonitorStatus() {
             if (!existingSet.has(camId)) {
                 const imgCard = document.createElement('div');
                 imgCard.dataset.snapshotCam = camId;
-                imgCard.className = 'rounded-lg border border-gray-200 overflow-hidden bg-gray-900';
+                imgCard.className = 'rounded-lg border border-gray-200 overflow-hidden bg-gray-900 cursor-zoom-in';
                 imgCard.innerHTML = `
-                    <img src="/api/tvmonitor/snapshot/${encodeURIComponent(camId)}?t=${Date.now()}"
-                         alt="ROI: ${camId}" class="w-full h-auto" />
+                    <div class="snapshot-wrapper relative">
+                        <div class="snapshot-placeholder flex flex-col items-center justify-center py-10 bg-gray-900 text-gray-500">
+                            <svg class="w-8 h-8 mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                            <span class="text-[10px] opacity-60">暂未获取画面</span>
+                        </div>
+                        <img src="/api/tvmonitor/snapshot/${encodeURIComponent(camId)}?t=${Date.now()}"
+                             alt="ROI: ${camId}" class="w-full h-auto hidden" onclick="openSnapshotLightbox(this.src)" onerror="this.classList.add('hidden');this.previousElementSibling.classList.remove('hidden')" onload="this.classList.remove('hidden');this.previousElementSibling.classList.add('hidden')" />
+                    </div>
                     <div class="text-[10px] text-gray-400 text-center py-1 bg-gray-800">${camId}</div>
                 `;
                 snapshotContainer.appendChild(imgCard);
@@ -1789,9 +1799,27 @@ function refreshSnapshots() {
     if (document.getElementById('tvmonitor-section').classList.contains('hidden')) return;
     document.querySelectorAll('[data-snapshot-cam] img').forEach(img => {
         const camId = img.closest('[data-snapshot-cam]').dataset.snapshotCam;
+        img.classList.add('hidden');
+        img.previousElementSibling.classList.remove('hidden');
         img.src = `/api/tvmonitor/snapshot/${encodeURIComponent(camId)}?t=${Date.now()}`;
     });
 }
+
+function openSnapshotLightbox(src) {
+    const lb = document.getElementById('snapshotLightbox');
+    const img = document.getElementById('snapshotLightboxImg');
+    img.src = src;
+    lb.classList.remove('hidden');
+}
+
+function closeSnapshotLightbox() {
+    document.getElementById('snapshotLightbox').classList.add('hidden');
+    document.getElementById('snapshotLightboxImg').src = '';
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeSnapshotLightbox();
+});
 
 // 在页面加载后启动
 window.addEventListener('load', () => {

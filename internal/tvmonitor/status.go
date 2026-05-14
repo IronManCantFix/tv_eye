@@ -9,6 +9,7 @@ import (
 type MonitorStatus struct {
 	CameraID       string  `json:"camera_id"`
 	State          string  `json:"state"`
+	TVOn           bool    `json:"tv_on"`
 	Message        string  `json:"message,omitempty"`
 	SessionStart   string  `json:"session_start,omitempty"`
 	DailyMinutes   float64 `json:"daily_minutes"`
@@ -57,7 +58,7 @@ func UnregisterMonitor(cameraID string) {
 	delete(statusMap, cameraID)
 }
 
-func UpdateMonitorStatus(cameraID string, state MonitorState, sessionStart time.Time, dailyMinutes float64, restStart time.Time, dailyLocked bool) {
+func UpdateMonitorStatus(cameraID string, state MonitorState, tvOn bool, sessionStart time.Time, dailyMinutes float64, restStart time.Time, dailyLocked bool) {
 	statusMux.Lock()
 	defer statusMux.Unlock()
 
@@ -66,6 +67,7 @@ func UpdateMonitorStatus(cameraID string, state MonitorState, sessionStart time.
 		return
 	}
 	s.State = state.String()
+	s.TVOn = tvOn
 	s.DailyMinutes = dailyMinutes
 	s.DailyLocked = dailyLocked
 	s.LastUpdated = time.Now().Format("15:04:05")

@@ -260,8 +260,12 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 		}
 	}
 
-	// Skip everything if outside monitor time range
+	// Outside monitor time range: reset to IDLE and push status so frontend doesn't freeze
 	if !util.IsWithinTimeRange(m.config.MonitorTime) {
+		if m.state != StateIdle {
+			m.setState(StateIdle)
+		}
+		UpdateMonitorStatus(m.config.CameraID, m.state, false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
 		m.mu.Unlock()
 		return tickActionNone
 	}
@@ -276,6 +280,7 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 	}
 	// Retrieve the latest frame (decode only this one)
 	if !cap.Retrieve(frame) || frame.Empty() {
+		UpdateMonitorStatus(m.config.CameraID, m.state, false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
 		m.mu.Unlock()
 		return tickActionReconnect
 	}
@@ -378,6 +383,8 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 			AddLog(m.config.CameraID, "rest_complete", "休息时间结束，可继续观看")
 		}
 	}
+
+	UpdateMonitorStatus(m.config.CameraID, m.state, tvOn, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
 
 	m.mu.Unlock()
 

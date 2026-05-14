@@ -20,8 +20,9 @@ type Detector struct {
 	roiPoints       [4]image.Point // pixel coords for drawing (TL, TR, BR, BL)
 	onCount         int
 	offCount        int
-	lastStableState bool
+	lastStableState  bool
 	lastLaplacianVar float64
+	lastBrightness   float64
 }
 
 const debounceCount = 3
@@ -102,7 +103,23 @@ func (d *Detector) TVState(frame gocv.Mat) bool {
 	lapVar := float64(stdDevF.GetFloatAt(0, 0))
 	d.lastLaplacianVar = lapVar
 
-	tvOn := lapVar > d.config.BrightnessThreshold
+	// Also compute average brightness of the ROI region
+	brightnessMean := gocv.NewMat()
+	brightnessStdDev := gocv.NewMat()
+	defer brightnessMean.Close()
+	defer brightnessStdDev.Close()
+	gocv.MeanStdDev(gray, &brightnessMean, &brightnessStdDev)
+	brightnessMeanF := gocv.NewMat()
+	defer brightnessMeanF.Close()
+	brightnessMean.ConvertTo(&brightnessMeanF, gocv.MatTypeCV32F)
+	avgBrightness := float64(brightnessMeanF.GetFloatAt(0, 0))
+	d.lastBrightness = avgBrightness
+
+	// TV is considered ON only when BOTH conditions are met:
+	// 1. Laplacian variance exceeds threshold (texture/content present)
+	// 2. Average brightness is above a minimum (screen is emitting light)
+	// This avoids false positives from ambient light reflections on a dark/off screen.
+	tvOn := lapVar > d.config.BrightnessThreshold && avgBrightness > 15
 
 	if tvOn {
 		d.onCount++
@@ -118,8 +135,8 @@ func (d *Detector) TVState(frame gocv.Mat) bool {
 		d.lastStableState = false
 	}
 
-	log.Printf("[tvmonitor] TVState: raw=%v lapVar=%.1f threshold=%.1f onCount=%d offCount=%d stable=%v",
-		tvOn, lapVar, d.config.BrightnessThreshold, d.onCount, d.offCount, d.lastStableState)
+	log.Printf("[tvmonitor] TVState: raw=%v lapVar=%.1f brightness=%.1f threshold=%.1f onCount=%d offCount=%d stable=%v",
+		tvOn, lapVar, avgBrightness, d.config.BrightnessThreshold, d.onCount, d.offCount, d.lastStableState)
 
 	return d.lastStableState
 }
@@ -159,7 +176,7 @@ func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	gocv.PutText(&annotated, stateLabel, labelPos, gocv.FontHersheyPlain, 1.5, boxColor, 2)
 
 	infoPos := image.Pt(pts[3].X, pts[3].Y+18)
-	gocv.PutText(&annotated, fmt.Sprintf("LAP:%.1f", d.lastLaplacianVar), infoPos, gocv.FontHersheyPlain, 1.2, boxColor, 1)
+	gocv.PutText(&annotated, fmt.Sprintf("LAP:%.1f BRI:%.0f", d.lastLaplacianVar, d.lastBrightness), infoPos, gocv.FontHersheyPlain, 1.2, boxColor, 1)
 
 	timePos := image.Pt(10, annotated.Rows()-10)
 	gocv.PutText(&annotated, time.Now().Format("15:04:05"), timePos, gocv.FontHersheyPlain, 1.5, color.RGBA{R: 255, G: 255, B: 255, A: 200}, 2)
