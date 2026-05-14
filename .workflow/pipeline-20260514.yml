@@ -2,11 +2,11 @@ version: '1.0'
 name: pipeline-20260514
 displayName: pipeline-20260514
 triggers:
-  trigger: auto
+  trigger: manual
   push:
     branches:
       prefix:
-        - ''
+        - release
 stages:
   - name: stage-8243fc17
     displayName: 未命名
