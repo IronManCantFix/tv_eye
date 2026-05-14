@@ -18,7 +18,7 @@ stages:
         name: build_docker
         displayName: 镜像构建
         type: account
-        repository: crpi-4r2zz5ptdbnketcl.cn-hangzhou.personal.cr.aliyuncs.com/iron_hub/cameras
+        repository: crpi-4r2zz5ptdbnketcl.cn-hangzhou.personal.cr.aliyuncs.com
         username: 471640241@qq.com
         password: hhd286518
         tag: ${GITEE_PIPELINE_BUILD_NUMBER}
