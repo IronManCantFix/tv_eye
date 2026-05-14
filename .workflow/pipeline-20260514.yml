@@ -28,7 +28,6 @@ stages:
         isCache: false
         processorType:
           - amd64
-          - arm64
         parameter: {}
         notify: []
         strategy:
