@@ -28,7 +28,7 @@ RUN apt-get update && \
     CGO_ENABLED=1 go build -ldflags="-s -w -X main.Version=${VERSION}" -o camkeep main.go
 
 # --- 阶段二：构建最终运行环境 ---
-FROM golang:1.25.4
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25.4
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
