@@ -20,8 +20,18 @@ var httpClient = &http.Client{
 	Timeout: 3 * time.Second, // 3秒超时，防止任何请求卡死
 }
 
+// isRemoteGo2rtcHost 判断 go2rtc 是否配置为远程模式（由外部自行启动）
+func isRemoteGo2rtcHost() bool {
+	host := constant.DefaultGo2rtcHost
+	return host != "localhost" && host != "127.0.0.1" && host != "::1"
+}
+
 // StartGo2rtcDaemon 负责启动并守护底层流媒体引擎
 func StartGo2rtcDaemon() {
+	if isRemoteGo2rtcHost() {
+		log.Println("go2rtc 配置为远程模式，跳过二进制启动（由外部自行管理）")
+		return
+	}
 	go func() {
 		//for {
 		log.Println("正在启动底层流媒体引擎 go2rtc...")

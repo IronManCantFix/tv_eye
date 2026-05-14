@@ -432,6 +432,13 @@ func handleUnmanagedStreams(c *gin.Context) {
 	c.JSON(http.StatusOK, unmanaged)
 }
 
+func handleGo2rtcConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"host": constant.DefaultGo2rtcHost,
+		"port": constant.DefaultGo2rtcApiPort,
+	})
+}
+
 func handlePlayHLS(c *gin.Context) {
 	tsPath := c.Param("filepath") // 获取路径，例如: /front-door/2026-04-27/12-00-00.ts
 	if !strings.HasSuffix(tsPath, ".ts") {

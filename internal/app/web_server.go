@@ -31,6 +31,7 @@ func startWebServer() {
 	r.GET("/api/record/download", handleDownloadRecord)
 	r.DELETE("/api/record", handleDeleteRecord)
 	r.GET("/api/go2rtc/unmanaged", handleUnmanagedStreams)
+	r.GET("/api/go2rtc/config", handleGo2rtcConfig)
 	r.GET("/api/tvmonitor/status", handleTVMonitorStatus)
 	r.GET("/api/tvmonitor/logs", handleTVMonitorLogs)
 	r.POST("/api/tvmonitor/logs/clear", handleTVMonitorClearLogs)

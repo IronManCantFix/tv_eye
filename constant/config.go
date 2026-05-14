@@ -1,6 +1,29 @@
 package constant
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
+
+// ROIPoint 表示 ROI 四边形的一个顶点 (百分比坐标 0.0~1.0)
+type ROIPoint [2]float64
+
+func (p *ROIPoint) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var slice []float64
+	if err := unmarshal(&slice); err != nil {
+		return err
+	}
+	if len(slice) != 2 {
+		return fmt.Errorf("ROI point needs exactly 2 elements, got %d", len(slice))
+	}
+	(*p)[0] = slice[0]
+	(*p)[1] = slice[1]
+	return nil
+}
+
+func (p ROIPoint) IsZero() bool {
+	return p[0] == 0 && p[1] == 0
+}
 
 var ConfigMux sync.RWMutex
 
@@ -30,10 +53,10 @@ type TVMonitorConfig struct {
 	CameraID            string  `yaml:"camera_id"`
 	Enabled             bool    `yaml:"enabled"`
 	MonitorTime         string  `yaml:"monitor_time"`
-	ROIX                float64 `yaml:"roi_x"`
-	ROIY                float64 `yaml:"roi_y"`
-	ROIW                float64 `yaml:"roi_w"`
-	ROIH                float64 `yaml:"roi_h"`
+	ROITopLeft      ROIPoint `yaml:"roi_top_left"`
+	ROITopRight     ROIPoint `yaml:"roi_top_right"`
+	ROIBottomRight  ROIPoint `yaml:"roi_bottom_right"`
+	ROIBottomLeft   ROIPoint `yaml:"roi_bottom_left"`
 	ROIAutoCalibrate    bool    `yaml:"roi_auto_calibrate"`
 	CheckInterval       int     `yaml:"check_interval"`
 	BrightnessThreshold float64 `yaml:"brightness_threshold"`

@@ -68,19 +68,31 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 		m.config.CameraID, m.config.MaxSessionMinutes, m.config.RestMinutes, m.config.MaxDailyMinutes)
 
 	// Try auto-calibrate if ROI is zero and auto_calibrate is enabled
-	if m.config.ROIAutoCalibrate && (m.config.ROIX == 0 && m.config.ROIY == 0) {
+	if m.config.ROIAutoCalibrate && (m.config.ROITopLeft.IsZero() && m.config.ROITopRight.IsZero()) {
 		log.Printf("[tvmonitor:%s] Attempting auto-calibration...", m.config.CameraID)
-		if x, y, w, h, err := AutoCalibrateROI(m.rtspURL, m.config); err != nil {
-			log.Printf("[tvmonitor:%s] Auto-calibration failed: %v (will use manual ROI)", m.config.CameraID, err)
-		} else {
-			m.config.ROIX, m.config.ROIY, m.config.ROIW, m.config.ROIH = x, y, w, h
+		cap, err := gocv.OpenVideoCapture(m.rtspURL)
+		if err == nil {
+			frame := gocv.NewMat()
+			if cap.Read(&frame) && !frame.Empty() {
+				fw, fh := float64(frame.Cols()), float64(frame.Rows())
+				frame.Close()
+				if tl, tr, br, bl, err := AutoCalibrateROI(m.rtspURL, fw, fh); err != nil {
+					log.Printf("[tvmonitor:%s] Auto-calibration failed: %v (will use manual ROI)", m.config.CameraID, err)
+				} else {
+					m.config.ROITopLeft, m.config.ROITopRight = tl, tr
+					m.config.ROIBottomRight, m.config.ROIBottomLeft = br, bl
+				}
+			} else {
+				frame.Close()
+			}
+			cap.Close()
 		}
 	}
 
 	// If no valid ROI, enter waiting state and retry periodically
-	if m.config.ROIW <= 0 || m.config.ROIH <= 0 {
+	if m.config.ROITopLeft.IsZero() && m.config.ROITopRight.IsZero() && m.config.ROIBottomRight.IsZero() && m.config.ROIBottomLeft.IsZero() {
 		log.Printf("[tvmonitor:%s] No valid ROI configured, waiting for manual configuration", m.config.CameraID)
-		SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_x/roi_y/roi_w/roi_h，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
+		SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_top_left/roi_top_right/roi_bottom_left/roi_bottom_right，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
 		m.waitForROIRetry(ctx)
 		return
 	}
@@ -199,14 +211,27 @@ func (m *TVMonitor) waitForROIRetry(ctx context.Context) {
 		case <-ticker.C:
 			if m.config.ROIAutoCalibrate {
 				log.Printf("[tvmonitor:%s] Retrying auto-calibration...", m.config.CameraID)
-				if x, y, w, h, err := AutoCalibrateROI(m.rtspURL, m.config); err != nil {
-					log.Printf("[tvmonitor:%s] Auto-calibration still failing: %v", m.config.CameraID, err)
-					SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_x/roi_y/roi_w/roi_h，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
-				} else {
-					m.config.ROIX, m.config.ROIY, m.config.ROIW, m.config.ROIH = x, y, w, h
-					log.Printf("[tvmonitor:%s] Auto-calibration succeeded on retry!", m.config.CameraID)
-					SetMonitorMessage(m.config.CameraID, "IDLE", "")
-					return
+				cap, err := gocv.OpenVideoCapture(m.rtspURL)
+				if err == nil {
+					frame := gocv.NewMat()
+					if cap.Read(&frame) && !frame.Empty() {
+						fw, fh := float64(frame.Cols()), float64(frame.Rows())
+						frame.Close()
+						if tl, tr, br, bl, err := AutoCalibrateROI(m.rtspURL, fw, fh); err != nil {
+							log.Printf("[tvmonitor:%s] Auto-calibration still failing: %v", m.config.CameraID, err)
+							SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_top_left/roi_top_right/roi_bottom_left/roi_bottom_right，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
+						} else {
+							m.config.ROITopLeft, m.config.ROITopRight = tl, tr
+							m.config.ROIBottomRight, m.config.ROIBottomLeft = br, bl
+							log.Printf("[tvmonitor:%s] Auto-calibration succeeded on retry!", m.config.CameraID)
+							SetMonitorMessage(m.config.CameraID, "IDLE", "")
+							cap.Close()
+							return
+						}
+					} else {
+						frame.Close()
+					}
+					cap.Close()
 				}
 			}
 		}

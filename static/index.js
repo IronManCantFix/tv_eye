@@ -10,6 +10,7 @@ let selectedRecordRange = {start: '', end: ''};
 let selectedRecordPath = '';
 const maxRecordRangeDays = 7;
 const recordArchiveOpenDates = new Set();
+let go2rtcConfig = {host: '', port: 1984};
 
 window.onload = function () {
     if (typeof DPlayer === 'undefined') {
@@ -17,6 +18,7 @@ window.onload = function () {
         return;
     }
     initRecordRangeControls();
+    loadGo2rtcConfig();
     setLayout(1);
     loadStatus();
     setInterval(loadStatus, 5000);
@@ -229,6 +231,18 @@ function appendStreamToConfig(streamId) {
 
     textArea.classList.add('ring-2', 'ring-emerald-400', 'transition-all', 'duration-300');
     setTimeout(() => textArea.classList.remove('ring-2', 'ring-emerald-400'), 800);
+}
+
+// --- go2rtc 配置加载 ---
+async function loadGo2rtcConfig() {
+    try {
+        const resp = await fetch('/api/go2rtc/config');
+        if (resp.ok) {
+            go2rtcConfig = await resp.json();
+        }
+    } catch (e) {
+        console.warn('无法获取 go2rtc 配置，使用默认值');
+    }
 }
 
 // --- 状态加载 ---
@@ -1008,7 +1022,12 @@ function executePlayInCell(index, source, isLive, title, forceNative = false, wa
         dplayerContainer.classList.add('hidden');
         nativePlayer.classList.add('hidden');
         liveIframe.classList.remove('hidden');
-        liveIframe.src = `http://192.168.5.100:9110/stream.html?src=${encodeURIComponent(source)}`;
+        // 如果 go2rtc 配置的 host 是 127.0.0.1，说明 go2rtc 在本机，通过相对路径代理访问
+        // 否则需要使用远程地址访问（解决跨域问题）
+        const baseUrl = go2rtcConfig.host === '127.0.0.1'
+            ? ''
+            : `http://${go2rtcConfig.host}:${go2rtcConfig.port}`;
+        liveIframe.src = `${baseUrl}/stream.html?src=${encodeURIComponent(source)}`;
     } else {
         liveIframe.classList.add('hidden');
         liveIframe.src = '';

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/r0n9/camkeep/constant"
 	"github.com/r0n9/camkeep/internal/task"
@@ -35,10 +36,10 @@ func Run(appVersion string) {
 	task.StartGo2rtcDaemon()
 	// 动态轮询等待，确保 go2rtc API 彻底就绪（最大等待 10 秒）
 	log.Println("等待底层流媒体引擎 go2rtc 启动...")
-	//if err := task.WaitForGo2rtcReady(10 * time.Second); err != nil {
-	//	// 如果 10 秒了还没起来，说明底座进程严重故障，直接让主程序退出
-	//	log.Fatalf("致命错误: 无法连接到底层引擎: %v", err)
-	//}
+	if err := task.WaitForGo2rtcReady(10 * time.Second); err != nil {
+		// 如果 10 秒了还没起来，说明底座进程严重故障，直接让主程序退出
+		log.Fatalf("致命错误: 无法连接到底层引擎: %v", err)
+	}
 	log.Println("go2rtc 底座已完美就绪！")
 
 	// 1. 读取或初始化配置 (如果不存在则创建空配置)
