@@ -1,5 +1,5 @@
 # --- 阶段零：根据架构动态下载 go2rtc ---
-FROM alpine:latest AS go2rtc-downloader
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:latest AS go2rtc-downloader
 
 ARG TARGETARCH
 ARG VERSION="dev"
