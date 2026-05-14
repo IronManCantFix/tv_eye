@@ -20,6 +20,7 @@ import (
 	"github.com/r0n9/camkeep/constant"
 	"github.com/r0n9/camkeep/internal/service"
 	"github.com/r0n9/camkeep/internal/task"
+	"github.com/r0n9/camkeep/internal/tvmonitor"
 )
 
 type recordFile struct {
@@ -57,8 +58,22 @@ const (
 var recordDatePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
 func handleIndex(c *gin.Context) {
+	constant.ConfigMux.RLock()
+	tvMonitorEnabled := false
+	var defaultTTSMessage string
+	for _, tm := range currentConfig.TVMonitors {
+		if tm.Enabled {
+			tvMonitorEnabled = true
+			defaultTTSMessage = tm.HATTSMessage
+			break
+		}
+	}
+	constant.ConfigMux.RUnlock()
+
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"Version": version,
+		"Version":           version,
+		"TVMonitorEnabled":  tvMonitorEnabled,
+		"DefaultTTSMessage": defaultTTSMessage,
 	})
 }
 
@@ -622,4 +637,83 @@ func probeVideoCodec(fullPath string) (string, error) {
 func isH265Codec(codec string) bool {
 	codec = strings.ToLower(codec)
 	return codec == "hevc" || codec == "h265" || codec == "h.265"
+}
+
+func handleTVMonitorStatus(c *gin.Context) {
+	statuses := tvmonitor.GetAllStatuses()
+	c.JSON(http.StatusOK, statuses)
+}
+
+func handleTVMonitorLogs(c *gin.Context) {
+	logs := tvmonitor.GetRecentLogs(50)
+	c.JSON(http.StatusOK, logs)
+}
+
+func handleTVMonitorSnapshot(c *gin.Context) {
+	cameraID := c.Param("id")
+	jpeg, ok := tvmonitor.GetSnapshot(cameraID)
+	if !ok {
+		log.Printf("[tvmonitor] snapshot not found for camera: %q", cameraID)
+		c.JSON(http.StatusNotFound, gin.H{"error": "暂无快照"})
+		return
+	}
+	c.Header("Content-Type", "image/jpeg")
+	c.Header("Cache-Control", "no-cache")
+	c.Data(http.StatusOK, "image/jpeg", jpeg)
+}
+
+func handleTVMonitorClearLogs(c *gin.Context) {
+	tvmonitor.ClearLogs()
+	c.JSON(http.StatusOK, gin.H{"msg": "日志已清除"})
+}
+
+func handleTVMonitorIRTurnOff(c *gin.Context) {
+	cfg := getFirstEnabledTVMonitor()
+	if cfg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "未找到启用的电视监控配置"})
+		return
+	}
+	ha := tvmonitor.NewHAClient(*cfg)
+	if err := ha.PressIRButton("ir_turn_off"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"msg": "红外关机指令已发送"})
+}
+
+func handleTVMonitorPlayText(c *gin.Context) {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式错误"})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "播放文本不能为空"})
+		return
+	}
+
+	cfg := getFirstEnabledTVMonitor()
+	if cfg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "未找到启用的电视监控配置"})
+		return
+	}
+	ha := tvmonitor.NewHAClient(*cfg)
+	if err := ha.PlayText("play_text", req.Message); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"msg": "播放文本已发送"})
+}
+
+func getFirstEnabledTVMonitor() *constant.TVMonitorConfig {
+	constant.ConfigMux.RLock()
+	defer constant.ConfigMux.RUnlock()
+	for _, tm := range currentConfig.TVMonitors {
+		if tm.Enabled {
+			return &tm
+		}
+	}
+	return nil
 }

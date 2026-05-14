@@ -24,49 +24,55 @@ func NewHAClient(cfg constant.TVMonitorConfig) *HAClient {
 	}
 }
 
-// ExecuteControl 执行遥控器控制动作。如果未配置 ha_control_service 则跳过。
-func (c *HAClient) ExecuteControl(prefix string) {
-	if c.config.HAControlService == "" || c.config.HAControlEntityID == "" {
-		log.Printf("[%s] 未配置遥控器控制，跳过", prefix)
-		return
+// PressIRButton 按下红外按钮 (如红外关机)。如果未配置则跳过。
+func (c *HAClient) PressIRButton(prefix string) error {
+	if c.config.HAIRTurnOffButtonID == "" {
+		return fmt.Errorf("未配置红外关机按钮")
 	}
-	log.Printf("[%s] 正在调用 HA 控制服务 %s, 实体: %s", prefix, c.config.HAControlService, c.config.HAControlEntityID)
-	if err := c.callService(c.config.HAControlService, map[string]interface{}{"entity_id": c.config.HAControlEntityID}); err != nil {
-		log.Printf("[%s] 遥控器控制失败: %v", prefix, err)
-	} else {
-		log.Printf("[%s] 遥控器控制成功", prefix)
-	}
+	return c.callService("button.press", map[string]interface{}{"entity_id": c.config.HAIRTurnOffButtonID})
 }
 
-// ExecuteTTS 执行 TTS 语音播报。如果未配置 ha_tts_entity_id 或 message 为空则跳过。
-func (c *HAClient) ExecuteTTS(prefix, message string) {
-	if c.config.HATTSEntityID == "" {
-		log.Printf("[%s] 未配置 TTS 实体，跳过语音播报", prefix)
-		return
+// PlayText 通过 HA 通知服务让音箱播放文本。
+// 支持两种配置格式:
+//   - "notify.send_message" → 直接作为服务调用，entity_id 需在 message body 中指定
+//   - "notify.xiaomi_cn_xxx" → 识别为 notify 实体 ID，自动通过 notify.send_message 调用
+func (c *HAClient) PlayText(prefix, message string) error {
+	if c.config.HATTSService == "" {
+		return fmt.Errorf("未配置音箱播放服务")
 	}
 	if message == "" {
-		log.Printf("[%s] TTS 消息为空，跳过语音播报", prefix)
-		return
+		return fmt.Errorf("播放文本不能为空")
 	}
-	log.Printf("[%s] 正在发送 TTS 播报到 %s: %q", prefix, c.config.HATTSEntityID, message)
-	if err := c.callService("tts.google_translate_say", map[string]interface{}{
-		"entity_id": c.config.HATTSEntityID,
-		"message":   message,
-	}); err != nil {
-		log.Printf("[%s] TTS 播报失败: %v", prefix, err)
-	} else {
-		log.Printf("[%s] TTS 播报成功", prefix)
+
+	svc := c.config.HATTSService
+	body := map[string]interface{}{"message": message}
+
+	// 如果配置值是 "notify.xxx" 格式，视为 notify 实体 ID，用 notify.send_message 调用
+	if strings.HasPrefix(svc, "notify.") && !strings.HasPrefix(svc, "notify.send_") {
+		body["entity_id"] = svc
+		svc = "notify.send_message"
 	}
+
+	return c.callService(svc, body)
 }
 
-// TriggerShutdown 先播报 TTS (如有)，等待 5 秒，再执行遥控器控制 (如有)。
+// TriggerShutdown 先通过音箱播放提示文本 (如有)，等待 5 秒，再通过红外按钮关机 (如有)。
 func (c *HAClient) TriggerShutdown(prefix, ttsMessage string) {
-	c.ExecuteTTS(prefix, ttsMessage)
-	if c.config.HATTSEntityID != "" && ttsMessage != "" {
-		log.Printf("[%s] 等待 5 秒让 TTS 播放完毕...", prefix)
-		time.Sleep(5 * time.Second)
+	if c.config.HATTSService != "" && ttsMessage != "" {
+		if err := c.PlayText(prefix, ttsMessage); err != nil {
+			log.Printf("[%s] 播放提示失败: %v", prefix, err)
+		} else {
+			log.Printf("[%s] 播放提示成功，等待 5 秒...", prefix)
+			time.Sleep(5 * time.Second)
+		}
 	}
-	c.ExecuteControl(prefix)
+	if c.config.HAIRTurnOffButtonID != "" {
+		if err := c.PressIRButton(prefix); err != nil {
+			log.Printf("[%s] 红外关机失败: %v", prefix, err)
+		} else {
+			log.Printf("[%s] 红外关机成功", prefix)
+		}
+	}
 }
 
 func (c *HAClient) callService(service string, body map[string]interface{}) error {

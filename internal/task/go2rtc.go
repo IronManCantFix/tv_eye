@@ -23,22 +23,22 @@ var httpClient = &http.Client{
 // StartGo2rtcDaemon 负责启动并守护底层流媒体引擎
 func StartGo2rtcDaemon() {
 	go func() {
-		for {
-			log.Println("正在启动底层流媒体引擎 go2rtc...")
+		//for {
+		log.Println("正在启动底层流媒体引擎 go2rtc...")
 
-			// 调用同目录下的 go2rtc 二进制文件
-			cmd := exec.Command("./go2rtc")
+		// 调用同目录下的 go2rtc 二进制文件
+		cmd := exec.Command("./go2rtc")
 
-			// 如果你想在终端看到 go2rtc 的原生日志，可以取消下面两行的注释
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
+		// 如果你想在终端看到 go2rtc 的原生日志，可以取消下面两行的注释
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 
-			// 阻塞运行，直到进程意外退出
-			err := cmd.Run()
+		// 阻塞运行，直到进程意外退出
+		err := cmd.Run()
 
-			log.Printf("go2rtc 进程退出: %v，3秒后尝试重启...", err)
-			time.Sleep(3 * time.Second) // 缓冲时间，防止死循环狂刷日志
-		}
+		log.Printf("go2rtc 进程退出: %v，3秒后尝试重启...", err)
+		time.Sleep(3 * time.Second) // 缓冲时间，防止死循环狂刷日志
+		//}
 	}()
 }
 

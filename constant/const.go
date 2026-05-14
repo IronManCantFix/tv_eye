@@ -5,5 +5,5 @@ const OverridesFilePath = "config/overrides.json"
 
 const DefaultRecordBaseDir = "./records"
 
-const DefaultGo2rtcHost = "127.0.0.1"
+const DefaultGo2rtcHost = "192.168.5.100"
 const DefaultGo2rtcApiPort = 1984

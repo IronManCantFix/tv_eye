@@ -43,7 +43,27 @@ func loadOrInitConfig() constant.Config {
 						MotionDetectRatioThreshold: 0.01,
 					},
 				},
-			}
+				TVMonitors: []constant.TVMonitorConfig{
+					{
+						CameraID:            "摄像头1",
+						Enabled:             false,
+						MonitorTime:         "08:00-23:00",
+						ROIAutoCalibrate:    true,
+						CheckInterval:       30,
+						BrightnessThreshold: 30,
+						FrameDiffThreshold:  5.0,
+						MaxSessionMinutes:   5,
+						RestMinutes:         20,
+						MaxDailyMinutes:     60,
+						HAURL:               "http://homeassistant.local:8123",
+						HAToken:             "",
+						HAControlService:    "remote.turn_off",
+						HAControlEntityID:   "remote.tv_remote",
+						HATTSEntityID:       "media_player.xiao_ai",
+						HATTSMessage:        "看电视时间到了，休息一下吧",
+					},
+				},
+				}
 
 			// 将默认配置序列化为 YAML
 			out, err := yaml.Marshal(defaultCfg)

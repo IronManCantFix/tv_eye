@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 
 	"github.com/r0n9/camkeep/constant"
 	"github.com/r0n9/camkeep/internal/service"
@@ -45,8 +46,18 @@ func startTasks() {
 		}
 		tvmonitor.ApplyDefaults(&tmcfg)
 
-		// Resolve RTSP URL: use go2rtc proxy like camera tasks do
-		rtspURL := fmt.Sprintf("rtsp://%s:8554/%s", constant.DefaultGo2rtcHost, tmcfg.CameraID)
+		// Resolve RTSP URL: use camera's original RTSP URL if it's a standard protocol,
+		// otherwise fall back to go2rtc RTSP proxy (handles xiaomi:// etc.)
+		var rtspURL string
+		for _, cam := range cams {
+			if cam.ID == tmcfg.CameraID {
+				rtspURL = cam.RTSPUrl
+				break
+			}
+		}
+		if rtspURL == "" || rtspURL == "managed_by_go2rtc" || !isStandardRTSP(rtspURL) {
+			rtspURL = fmt.Sprintf("rtsp://%s:8554/%s", constant.DefaultGo2rtcHost, url.PathEscape(tmcfg.CameraID))
+		}
 
 		taskWg.Add(1)
 		go tvmonitor.NewTVMonitor(tmcfg, rtspURL).Run(ctx, &taskWg)
@@ -105,4 +116,8 @@ func cleanGhostStatus(newConfig constant.Config) {
 			log.Printf("已清理移除的摄像头状态: %s", id)
 		}
 	}
+}
+
+func isStandardRTSP(u string) bool {
+	return len(u) >= 7 && (u[:7] == "rtsp://" || u[:7] == "rtsps://")
 }

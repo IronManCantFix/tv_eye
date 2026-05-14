@@ -25,4 +25,7 @@ func ApplyDefaults(cfg *constant.TVMonitorConfig) {
 	if cfg.MonitorTime == "" {
 		cfg.MonitorTime = "08:00-23:00"
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "state"
+	}
 }

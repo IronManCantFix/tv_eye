@@ -1,29 +1,42 @@
 # CamKeep 配置文件
 # mode: normal (普通录制), timelapse (延时摄影)
 daily_merge:
-    enabled: false
-    time: "03:30"
+  enabled: false
+  time: "03:30"
 cameras:
-    - id: 摄像头1
-      rtsp_url: rtsp://admin:password@192.168.1.100:554/live
-      retention_days: 7
-      segment_duration: 600
+    - id: 江南城
+      rtsp_url: xiaomi://30068335:@192.168.5.138?did=1078410371&model=chuangmi.camera.061a01&subtype=2#video=copy#audio=pcmu
+      retention_days: 1
+      segment_duration: 3600
       format: ts
-      min_size_kb: 1024
-      record_time: 00:00-23:59
+      min_size_kb: 2028
+      record_time: 08:00-23:00
       mode: normal
-      capture_interval: 0
+      capture_interval: 5
       auto_discovered: false
 
 tv_monitors:
-  - camera_id: "摄像头1"
-    enabled: false
-    roi_auto_calibrate: true
-    max_session_minutes: 5
-    rest_minutes: 20
-    max_daily_minutes: 60
-    ha_url: "http://homeassistant.local:8123"
-    ha_token: ""
-    ha_service: "media_player.turn_off"
-    ha_entity_id: "media_player.xiao_ai"
-    ha_message: "看电视时间到了，休息一下吧"
+    - camera_id: "江南城"
+      enabled: true
+      monitor_time: "08:00-23:00"
+      roi_x: 0.60
+      roi_y: 0.07
+      roi_w: 0.25
+      roi_h: 0.35
+      roi_auto_calibrate: false
+      check_interval: 15
+      brightness_threshold: 45
+      frame_diff_threshold: 5.0
+      max_session_minutes: 5
+      rest_minutes: 20
+      max_daily_minutes: 60
+      ha_url: "http://192.168.5.100:8123"
+      ha_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1ZWY1Nzc0ZDA3NTY0YWQyYjgxM2M5NjBjNjE2NjM3ZiIsImlhdCI6MTc3ODYzNDQ3NCwiZXhwIjoyMDkzOTk0NDc0fQ.Z6Ky9vVQe46AzKVQaiASdA6Ir_quQqIBTrAfZais-HI"
+      ha_control_service: "remote.turn_off"
+      ha_control_entity_id: "remote.tv_remote"
+      ha_tts_entity_id: "media_player.xiao_ai"
+      ha_tts_message: "看电视时间到了，休息一下吧"
+      ha_ir_turn_off_button: "button.miir_cn_ir_1936366888175165441_ir01_turn_on_a_2_5"
+      ha_tts_service: "notify.xiaomi_cn_866304674_oh2p_play_text_a_7_3"
+      # state / tick / summary
+      log_level: "tick"

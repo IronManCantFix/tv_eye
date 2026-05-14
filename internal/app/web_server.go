@@ -31,6 +31,12 @@ func startWebServer() {
 	r.GET("/api/record/download", handleDownloadRecord)
 	r.DELETE("/api/record", handleDeleteRecord)
 	r.GET("/api/go2rtc/unmanaged", handleUnmanagedStreams)
+	r.GET("/api/tvmonitor/status", handleTVMonitorStatus)
+	r.GET("/api/tvmonitor/logs", handleTVMonitorLogs)
+	r.POST("/api/tvmonitor/logs/clear", handleTVMonitorClearLogs)
+	r.POST("/api/tvmonitor/ir_turn_off", handleTVMonitorIRTurnOff)
+	r.POST("/api/tvmonitor/play_text", handleTVMonitorPlayText)
+	r.GET("/api/tvmonitor/snapshot/:id", handleTVMonitorSnapshot)
 
 	r.StaticFS("/play", http.Dir(constant.DefaultRecordBaseDir))
 	r.GET("/play_hls/*filepath", handlePlayHLS)

@@ -1008,7 +1008,7 @@ function executePlayInCell(index, source, isLive, title, forceNative = false, wa
         dplayerContainer.classList.add('hidden');
         nativePlayer.classList.add('hidden');
         liveIframe.classList.remove('hidden');
-        liveIframe.src = `/stream.html?src=${encodeURIComponent(source)}`;
+        liveIframe.src = `http://192.168.5.100:9110/stream.html?src=${encodeURIComponent(source)}`;
     } else {
         liveIframe.classList.add('hidden');
         liveIframe.src = '';
@@ -1525,4 +1525,256 @@ function toggleCellFullscreen(index) {
             wrapper.classList.remove('rounded-none', 'border-0');
         }
     });
+});
+
+// === TV 监控面板 ===
+async function loadTVMonitorStatus() {
+    try {
+        const resp = await fetch('/api/tvmonitor/status');
+        if (!resp.ok) return;
+        const statuses = await resp.json();
+
+        const container = document.getElementById('tvmonitor-status');
+        container.innerHTML = '';
+
+        statuses.forEach(s => {
+            const stateColors = {
+                'IDLE': 'bg-gray-100 text-gray-600 border-gray-200',
+                'WATCHING': 'bg-green-50 text-green-700 border-green-200',
+                'RESTING': 'bg-amber-50 text-amber-700 border-amber-200',
+                'NO_ROI': 'bg-blue-50 text-blue-700 border-blue-200',
+                'ERROR': 'bg-red-50 text-red-700 border-red-200'
+            };
+            const stateLabels = {
+                'IDLE': '空闲',
+                'WATCHING': '观看中',
+                'RESTING': '休息中',
+                'NO_ROI': '未就绪',
+                'ERROR': '异常'
+            };
+            const stateDots = {
+                'IDLE': 'bg-gray-400',
+                'WATCHING': 'bg-green-500 animate-pulse',
+                'RESTING': 'bg-amber-500',
+                'NO_ROI': 'bg-blue-400',
+                'ERROR': 'bg-red-500'
+            };
+
+            const colorClass = stateColors[s.state] || stateColors['IDLE'];
+            const label = stateLabels[s.state] || s.state;
+            const dotClass = stateDots[s.state] || stateDots['IDLE'];
+
+            let cardContent = '';
+
+            // NO_ROI or ERROR: show message banner instead of normal status
+            if (s.state === 'NO_ROI' || s.state === 'ERROR') {
+                const icon = s.state === 'NO_ROI'
+                    ? '<svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>'
+                    : '<svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+                cardContent = `
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center">
+                            <div class="w-2.5 h-2.5 rounded-full ${dotClass} mr-2"></div>
+                            <span class="font-bold text-sm">${s.camera_id}</span>
+                        </div>
+                        <span class="text-xs font-bold px-2 py-0.5 rounded-full border ${colorClass}">${label}</span>
+                    </div>
+                    <div class="flex items-start gap-2 rounded-md bg-white/60 p-3 border border-current/10">
+                        ${icon}
+                        <p class="text-xs leading-relaxed">${s.message || '等待配置...'}</p>
+                    </div>`;
+            } else {
+                const dailyPercent = Math.min((s.daily_minutes / s.max_daily_mins) * 100, 100);
+                const dailyColor = dailyPercent > 80 ? 'bg-red-500' : dailyPercent > 50 ? 'bg-amber-400' : 'bg-green-500';
+
+                let details = '';
+                if (s.state === 'WATCHING') {
+                    details = `
+                        <div class="text-xs text-gray-500 mt-2 space-y-1">
+                            <div>当前会话: <span class="font-bold text-gray-700">${s.session_mins.toFixed(1)}</span> / ${s.max_session_mins.toFixed(0)} 分钟</div>
+                        </div>`;
+                } else if (s.state === 'RESTING') {
+                    details = `
+                        <div class="text-xs text-gray-500 mt-2 space-y-1">
+                            <div>休息剩余: <span class="font-bold text-amber-600">${s.rest_remaining.toFixed(1)}</span> 分钟</div>
+                        </div>`;
+                }
+                if (s.daily_locked) {
+                    details += `<div class="text-xs text-red-500 font-bold mt-1">今日时长已耗尽，锁定至次日零点</div>`;
+                }
+
+                cardContent = `
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center">
+                            <div class="w-2.5 h-2.5 rounded-full ${dotClass} mr-2"></div>
+                            <span class="font-bold text-sm">${s.camera_id}</span>
+                        </div>
+                        <span class="text-xs font-bold px-2 py-0.5 rounded-full border ${colorClass}">${label}</span>
+                    </div>
+                    <div class="mt-2">
+                        <div class="flex justify-between text-xs text-gray-500 mb-1">
+                            <span>今日观看</span>
+                            <span class="font-bold">${s.daily_minutes.toFixed(1)} / ${s.max_daily_mins.toFixed(0)} 分钟</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div class="${dailyColor} h-1.5 rounded-full transition-all duration-500" style="width: ${dailyPercent}%"></div>
+                        </div>
+                    </div>
+                    ${details}`;
+            }
+
+            const card = document.createElement('div');
+            card.className = `rounded-lg border p-4 ${colorClass} transition-all`;
+            card.innerHTML = cardContent + `<div class="text-[10px] text-gray-400 mt-2 text-right">更新于 ${s.last_updated}</div>`;
+            container.appendChild(card);
+        });
+
+        // Ensure snapshot DOM nodes exist (creation only, src refresh is independent)
+        const snapshotContainer = document.getElementById('tvmonitor-snapshots');
+        const placeholder = snapshotContainer.querySelector(':scope > .text-gray-400');
+        if (placeholder) placeholder.remove();
+        const existingCards = snapshotContainer.querySelectorAll('[data-snapshot-cam]');
+        const existingSet = new Set();
+        existingCards.forEach(el => existingSet.add(el.dataset.snapshotCam));
+
+        statuses.forEach(s => {
+            const camId = s.camera_id;
+            if (!existingSet.has(camId)) {
+                const imgCard = document.createElement('div');
+                imgCard.dataset.snapshotCam = camId;
+                imgCard.className = 'rounded-lg border border-gray-200 overflow-hidden bg-gray-900';
+                imgCard.innerHTML = `
+                    <img src="/api/tvmonitor/snapshot/${encodeURIComponent(camId)}?t=${Date.now()}"
+                         alt="ROI: ${camId}" class="w-full h-auto" />
+                    <div class="text-[10px] text-gray-400 text-center py-1 bg-gray-800">${camId}</div>
+                `;
+                snapshotContainer.appendChild(imgCard);
+            }
+            existingSet.delete(camId);
+        });
+        existingSet.forEach(camId => {
+            const el = snapshotContainer.querySelector(`[data-snapshot-cam="${camId}"]`);
+            if (el) el.remove();
+        });
+    } catch (e) {
+        console.error('TV监控状态加载失败:', e);
+    }
+}
+
+async function loadTVMonitorLogs() {
+    if (document.getElementById('tvmonitor-section').classList.contains('hidden')) return;
+    try {
+        const resp = await fetch('/api/tvmonitor/logs');
+        if (!resp.ok) return;
+        const logs = await resp.json();
+
+        const container = document.getElementById('tvmonitor-logs');
+        if (!logs || logs.length === 0) {
+            container.innerHTML = '<div class="text-sm text-gray-400 text-center py-6">暂无日志</div>';
+            return;
+        }
+
+        container.innerHTML = '';
+        const eventIcons = {
+            'tv_on': '<span class="text-green-500">●</span>',
+            'tv_off': '<span class="text-gray-400">●</span>',
+            'session_exceeded': '<span class="text-red-500">●</span>',
+            'daily_exceeded': '<span class="text-red-600">●</span>',
+            'rest_violation': '<span class="text-amber-500">●</span>',
+            'rest_complete': '<span class="text-blue-500">●</span>'
+        };
+
+        logs.slice().reverse().forEach(log => {
+            const icon = eventIcons[log.event_type] || '<span class="text-gray-400">●</span>';
+            const item = document.createElement('div');
+            item.className = 'flex items-start text-xs py-1.5 border-b border-gray-100 last:border-0';
+            item.innerHTML = `
+                <span class="text-gray-400 font-mono mr-2 shrink-0">${log.time}</span>
+                ${icon}
+                <span class="ml-2 text-gray-600">${log.message}</span>
+            `;
+            container.appendChild(item);
+        });
+    } catch (e) {
+        console.error('TV监控日志加载失败:', e);
+    }
+}
+
+async function clearTVMonitorLogs() {
+    await fetch('/api/tvmonitor/logs/clear', {method: 'POST'});
+    loadTVMonitorLogs();
+}
+
+async function irTurnOff() {
+    const btn = document.getElementById('irTurnOffBtn');
+    const originText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> 发送中...';
+    try {
+        const resp = await fetch('/api/tvmonitor/ir_turn_off', {method: 'POST'});
+        const data = await resp.json();
+        if (resp.ok) {
+            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 已发送';
+            btn.classList.add('bg-green-50', 'text-green-600', 'border-green-200');
+            btn.classList.remove('bg-red-50', 'text-red-600', 'border-red-200');
+        } else {
+            alert('红外关机失败: ' + data.error);
+            btn.innerHTML = originText;
+        }
+    } catch (e) {
+        alert('请求失败: ' + e.message);
+        btn.innerHTML = originText;
+    }
+    btn.disabled = false;
+    setTimeout(() => {
+        btn.innerHTML = originText;
+        btn.classList.remove('bg-green-50', 'text-green-600', 'border-green-200');
+        btn.classList.add('bg-red-50', 'text-red-600', 'border-red-200');
+    }, 2000);
+}
+
+async function playTTS() {
+    const input = document.getElementById('ttsInput');
+    const message = input.value.trim();
+    if (!message) return;
+    try {
+        const resp = await fetch('/api/tvmonitor/play_text', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message})
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            input.value = '';
+        } else {
+            alert('播放失败: ' + data.error);
+        }
+    } catch (e) {
+        alert('请求失败: ' + e.message);
+    }
+}
+
+// 初始化 TV 监控轮询
+function initTVMonitorPolling() {
+    loadTVMonitorStatus();
+    loadTVMonitorLogs();
+    setInterval(() => {
+        loadTVMonitorStatus();
+        loadTVMonitorLogs();
+    }, 5000);
+    // Refresh snapshots independently every 5 seconds
+    setInterval(refreshSnapshots, 5000);
+}
+
+function refreshSnapshots() {
+    if (document.getElementById('tvmonitor-section').classList.contains('hidden')) return;
+    document.querySelectorAll('[data-snapshot-cam] img').forEach(img => {
+        const camId = img.closest('[data-snapshot-cam]').dataset.snapshotCam;
+        img.src = `/api/tvmonitor/snapshot/${encodeURIComponent(camId)}?t=${Date.now()}`;
+    });
+}
+
+// 在页面加载后启动
+window.addEventListener('load', () => {
+    setTimeout(initTVMonitorPolling, 1000);
 });

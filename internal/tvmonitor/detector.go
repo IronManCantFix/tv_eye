@@ -3,17 +3,24 @@ package tvmonitor
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"log"
+	"time"
 
 	"github.com/r0n9/camkeep/constant"
 	"gocv.io/x/gocv"
 )
 
 type Detector struct {
-	config   constant.TVMonitorConfig
-	roiRect  image.Rectangle
-	prevGray gocv.Mat
+	config           constant.TVMonitorConfig
+	roiRect          image.Rectangle
+	onCount          int
+	offCount         int
+	lastStableState  bool
+	lastLaplacianVar float64
 }
+
+const debounceCount = 3
 
 func NewDetector(cfg constant.TVMonitorConfig, frameWidth, frameHeight int) *Detector {
 	d := &Detector{config: cfg}
@@ -41,6 +48,10 @@ func clamp(v, min, max int) int {
 }
 
 // TVState returns true if the TV appears to be on in the given frame.
+// Uses Laplacian variance to measure texture/detail richness:
+//   - TV on: rich content (text, UI, people) → high variance
+//   - TV off: uniform dark surface (even with reflections) → low variance
+// Uses debounce: state only changes after debounceCount consecutive readings.
 func (d *Detector) TVState(frame gocv.Mat) bool {
 	roi := frame.Region(d.roiRect)
 	defer roi.Close()
@@ -48,42 +59,83 @@ func (d *Detector) TVState(frame gocv.Mat) bool {
 	gray := gocv.NewMat()
 	defer gray.Close()
 	gocv.CvtColor(roi, &gray, gocv.ColorBGRToGray)
+	gocv.GaussianBlur(gray, &gray, image.Pt(3, 3), 0, 0, gocv.BorderDefault)
 
-	gocv.GaussianBlur(gray, &gray, image.Pt(5, 5), 0, 0, gocv.BorderDefault)
+	laplacian := gocv.NewMat()
+	defer laplacian.Close()
+	gocv.Laplacian(gray, &laplacian, gocv.MatTypeCV64F, 3, 1.0, 0.0, gocv.BorderDefault)
 
-	mean := gray.Mean()
-	brightness := mean.Val1
-	tvOn := brightness > d.config.BrightnessThreshold
+	mean := gocv.NewMat()
+	stdDev := gocv.NewMat()
+	defer mean.Close()
+	defer stdDev.Close()
+	gocv.MeanStdDev(laplacian, &mean, &stdDev)
 
-	// Frame-diff check (skip on first frame)
-	if d.prevGray.Empty() {
-		d.prevGray = gray.Clone()
-		return tvOn
+	stdDevF := gocv.NewMat()
+	defer stdDevF.Close()
+	stdDev.ConvertTo(&stdDevF, gocv.MatTypeCV32F)
+	lapVar := float64(stdDevF.GetFloatAt(0, 0))
+	d.lastLaplacianVar = lapVar
+
+	tvOn := lapVar > d.config.BrightnessThreshold
+
+	// Debounce: require consecutive readings before changing state
+	if tvOn {
+		d.onCount++
+		d.offCount = 0
+	} else {
+		d.offCount++
+		d.onCount = 0
 	}
 
-	diff := gocv.NewMat()
-	defer diff.Close()
-	gocv.AbsDiff(gray, d.prevGray, &diff)
+	if d.onCount >= debounceCount {
+		d.lastStableState = true
+	} else if d.offCount >= debounceCount {
+		d.lastStableState = false
+	}
 
-	stdDev := gocv.NewMat()
-	meanDev := gocv.NewMat()
-	defer stdDev.Close()
-	defer meanDev.Close()
-	gocv.MeanStdDev(diff, &meanDev, &stdDev)
+	log.Printf("[tvmonitor] TVState: raw=%v lapVar=%.1f threshold=%.1f onCount=%d offCount=%d stable=%v",
+		tvOn, lapVar, d.config.BrightnessThreshold, d.onCount, d.offCount, d.lastStableState)
 
-	frameDiff := float64(stdDev.GetFloatAt(0, 0))
-	tvOn = tvOn && frameDiff > d.config.FrameDiffThreshold
-
-	d.prevGray.Close()
-	d.prevGray = gray.Clone()
-	return tvOn
+	return d.lastStableState
 }
 
 // Close releases gocv resources.
-func (d *Detector) Close() {
-	if !d.prevGray.Empty() {
-		d.prevGray.Close()
+func (d *Detector) Close() {}
+
+// DrawROI draws the ROI rectangle on a copy of the frame and returns JPEG bytes.
+func (d *Detector) DrawROI(frame gocv.Mat) []byte {
+	annotated := frame.Clone()
+	defer annotated.Close()
+
+	green := color.RGBA{G: 255, A: 255}
+	red := color.RGBA{R: 255, A: 255}
+	boxColor := green
+	stateLabel := "TV OFF"
+	if d.lastStableState {
+		boxColor = red
+		stateLabel = "TV ON"
 	}
+
+	gocv.Rectangle(&annotated, d.roiRect, boxColor, 3)
+
+	labelPos := image.Pt(d.roiRect.Min.X, d.roiRect.Min.Y-8)
+	if labelPos.Y < 16 {
+		labelPos.Y = d.roiRect.Min.Y + 20
+	}
+	gocv.PutText(&annotated, stateLabel, labelPos, gocv.FontHersheyPlain, 1.5, boxColor, 2)
+
+	infoPos := image.Pt(d.roiRect.Min.X, d.roiRect.Max.Y+18)
+	gocv.PutText(&annotated, fmt.Sprintf("LAP:%.1f", d.lastLaplacianVar), infoPos, gocv.FontHersheyPlain, 1.2, boxColor, 1)
+
+	timePos := image.Pt(10, annotated.Rows()-10)
+	gocv.PutText(&annotated, time.Now().Format("15:04:05"), timePos, gocv.FontHersheyPlain, 1.5, color.RGBA{R: 255, G: 255, B: 255, A: 200}, 2)
+
+	buf, err := gocv.IMEncode(".jpg", annotated)
+	if err != nil {
+		return nil
+	}
+	return buf.GetBytes()
 }
 
 // AutoCalibrateROI attempts to detect the TV screen as the largest rectangle

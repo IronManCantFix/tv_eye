@@ -47,6 +47,9 @@ type TVMonitorConfig struct {
 	HAControlEntityID   string  `yaml:"ha_control_entity_id"`  // 遥控器实体 ID (如 remote.tv_remote)
 	HATTSEntityID       string  `yaml:"ha_tts_entity_id"`      // TTS 播报实体 ID (如 media_player.xiao_ai)，留空则不播报
 	HATTSMessage        string  `yaml:"ha_tts_message"`        // TTS 播报文本
+	HAIRTurnOffButtonID string  `yaml:"ha_ir_turn_off_button"` // 红外关机按钮实体 ID
+	HATTSService        string  `yaml:"ha_tts_service"`        // 音箱播放文本的 HA 服务 (如 notify.xiaomi_cn_xxx)
+	LogLevel            string  `yaml:"log_level"`             // 日志级别: "state"(默认,仅状态变化), "tick"(每次检测), "summary"(每5分钟摘要)
 }
 
 // Config 对应 yaml 配置文件
