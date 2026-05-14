@@ -21,7 +21,7 @@ stages:
         repository: crpi-4r2zz5ptdbnketcl.cn-hangzhou.personal.cr.aliyuncs.com
         username: 471640241@qq.com
         password: hhd286518
-        tag: CamKeep:${GITEE_PIPELINE_BUILD_NUMBER}
+        tag: camkeep:${GITEE_PIPELINE_BUILD_NUMBER}
         dockerfile: ./Dockerfile
         context: ''
         artifacts: []
