@@ -13,7 +13,7 @@ RUN echo "正在为 linux_${TARGETARCH} 下载 go2rtc..." && \
 
 # --- 阶段一：编译 CamKeep ---
 # 不使用 --platform=$BUILDPLATFORM，直接在目标平台上编译，确保 CGO gcc 架构匹配
-FROM golang:1.25.4 AS builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.25.4 AS builder
 
 ARG VERSION=dev
 
