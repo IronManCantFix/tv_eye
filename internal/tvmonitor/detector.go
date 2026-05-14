@@ -65,6 +65,8 @@ func (d *Detector) buildPerspectiveTransform(w, h int) {
 		{X: 0, Y: float32(dstH)},
 	})
 	d.perspectMat = gocv.GetPerspectiveTransform2f(src, dst)
+	src.Close()
+	dst.Close()
 }
 
 func ptDist(a, b image.Point) float64 {
@@ -166,6 +168,7 @@ func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	if err != nil {
 		return nil
 	}
+	defer buf.Close()
 	return buf.GetBytes()
 }
 

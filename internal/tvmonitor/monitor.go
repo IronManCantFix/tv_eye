@@ -375,7 +375,7 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 		if restElapsed >= m.config.RestMinutes && !m.dailyLocked {
 			log.Printf("[tvmonitor:%s] Rest period complete, ready for next session", m.config.CameraID)
 			m.setState(StateIdle)
-				AddLog(m.config.CameraID, "rest_complete", "休息时间结束，可继续观看")
+			AddLog(m.config.CameraID, "rest_complete", "休息时间结束，可继续观看")
 		}
 	}
 
