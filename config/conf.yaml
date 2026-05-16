@@ -1,5 +1,5 @@
 # CamKeep 配置文件
-# mode: normal (普通录制), timelapse (延时摄影)
+
 daily_merge:
   enabled: false
   time: "03:30"
@@ -13,30 +13,46 @@ cameras:
       record_time: 08:00-23:00
       mode: normal
       capture_interval: 5
+      motion_detect: false
+      motionDetectRatioThreshold: 0
       auto_discovered: false
-
 tv_monitors:
-    - camera_id: "江南城"
+    - camera_id: 江南城
       enabled: true
-      monitor_time: "08:00-23:00"
-      roi_top_left: [0.60, 0.05]
-      roi_top_right: [0.85, 0.10]
-      roi_bottom_right: [0.83, 0.42]
-      roi_bottom_left: [0.58, 0.32]
+      monitor_time: 08:00-23:00
+      roi_top_left:
+        - 0.6
+        - 0.05
+      roi_top_right:
+        - 0.85
+        - 0.1
+      roi_bottom_right:
+        - 0.83
+        - 0.42
+      roi_bottom_left:
+        - 0.58
+        - 0.32
       roi_auto_calibrate: false
-      check_interval: 15
+      check_interval: 5
       brightness_threshold: 35
-      frame_diff_threshold: 5.0
-      max_session_minutes: 5
+      frame_diff_threshold: 5
+      edge_threshold: 0
+      saturation_threshold: 0
+      motion_threshold: 0
+      target_duration: 0
+      debounce_frames: 0
+      auto_calibrate_baseline: false
+      baseline_frames: 0
+      max_session_minutes: 3
       rest_minutes: 20
       max_daily_minutes: 60
-      ha_url: "http://192.168.5.100:8123"
-      ha_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1ZWY1Nzc0ZDA3NTY0YWQyYjgxM2M5NjBjNjE2NjM3ZiIsImlhdCI6MTc3ODYzNDQ3NCwiZXhwIjoyMDkzOTk0NDc0fQ.Z6Ky9vVQe46AzKVQaiASdA6Ir_quQqIBTrAfZais-HI"
-      ha_control_service: "remote.turn_off"
-      ha_control_entity_id: "remote.tv_remote"
-      ha_tts_entity_id: "media_player.xiao_ai"
-      ha_tts_message: "看电视时间到了，休息一下吧"
-      ha_ir_turn_off_button: "button.miir_cn_ir_1936366888175165441_ir01_turn_on_a_2_5"
-      ha_tts_service: "notify.xiaomi_cn_866304674_oh2p_play_text_a_7_3"
-      # state / tick / summary
-      log_level: "tick"
+      ha_url: http://192.168.5.100:8123
+      ha_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1ZWY1Nzc0ZDA3NTY0YWQyYjgxM2M5NjBjNjE2NjM3ZiIsImlhdCI6MTc3ODYzNDQ3NCwiZXhwIjoyMDkzOTk0NDc0fQ.Z6Ky9vVQe46AzKVQaiASdA6Ir_quQqIBTrAfZais-HI
+      ha_control_service: remote.turn_off
+      ha_control_entity_id: remote.tv_remote
+      ha_tts_entity_id: media_player.xiao_ai
+      ha_tts_message: 看电视时间到了，休息一下吧
+      ha_ir_turn_off_button: button.miir_cn_ir_1936366888175165441_ir01_turn_on_a_2_5
+      ha_tts_service: notify.xiaomi_cn_866304674_oh2p_play_text_a_7_3
+      ha_notify_service: "hassbox_notify.hassbox_notify"  # 微信通知的 HA 服务
+      log_level: tick
