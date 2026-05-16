@@ -34,3 +34,6 @@ stages:
         notify: []
         strategy:
           retry: '0'
+          resource:
+            cpu: 2
+            memory: 4
