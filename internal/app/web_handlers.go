@@ -21,6 +21,7 @@ import (
 	"github.com/r0n9/camkeep/internal/service"
 	"github.com/r0n9/camkeep/internal/task"
 	"github.com/r0n9/camkeep/internal/tvmonitor"
+	"gopkg.in/yaml.v3"
 )
 
 type recordFile struct {
@@ -658,9 +659,11 @@ func handleTVMonitorLogs(c *gin.Context) {
 
 func handleTVMonitorSnapshot(c *gin.Context) {
 	cameraID := c.Param("id")
+
+	// Return the cached snapshot and request a fresh one for next time
 	jpeg, ok := tvmonitor.GetSnapshot(cameraID)
+	tvmonitor.RequestSnapshot(cameraID)
 	if !ok {
-		log.Printf("[tvmonitor] snapshot not found for camera: %q", cameraID)
 		c.JSON(http.StatusNotFound, gin.H{"error": "暂无快照"})
 		return
 	}
@@ -712,6 +715,56 @@ func handleTVMonitorPlayText(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"msg": "播放文本已发送"})
+}
+
+func handleTVMonitorToggle(c *gin.Context) {
+	data, err := os.ReadFile(constant.ConfigFilePath)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "读取配置失败"})
+		return
+	}
+
+	newConfig, err := parseConfigYAML(data)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "解析配置失败: " + err.Error()})
+		return
+	}
+
+	if len(newConfig.TVMonitors) == 0 {
+		c.JSON(400, gin.H{"error": "未配置 tv_monitors"})
+		return
+	}
+
+	// Toggle enabled state
+	newConfig.TVMonitors[0].Enabled = !newConfig.TVMonitors[0].Enabled
+	newEnabled := newConfig.TVMonitors[0].Enabled
+
+	// Marshal back to YAML and save
+	out, err := yaml.Marshal(newConfig)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "序列化配置失败"})
+		return
+	}
+
+	// Preserve the header comment if present
+	header := ""
+	content := string(data)
+	if idx := strings.Index(content, "---\n"); idx >= 0 {
+		header = content[:idx+4]
+	} else if strings.HasPrefix(content, "#") {
+		if nlIdx := strings.Index(content, "\n"); nlIdx >= 0 {
+			header = content[:nlIdx+1] + "\n"
+		}
+	}
+
+	finalOut := []byte(header + string(out))
+	if err := os.WriteFile(constant.ConfigFilePath, finalOut, 0644); err != nil {
+		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	go restartTasks(newConfig)
+	c.JSON(200, gin.H{"enabled": newEnabled})
 }
 
 func getFirstEnabledTVMonitor() *constant.TVMonitorConfig {

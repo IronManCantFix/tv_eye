@@ -1547,6 +1547,71 @@ function toggleCellFullscreen(index) {
 });
 
 // === TV 监控面板 ===
+function parseTimeHMSToTodayDate(hms) {
+    if (!hms) return 0;
+    const parts = hms.split(':').map(Number);
+    if (parts.length < 3 || parts.some(isNaN)) return 0;
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), parts[0], parts[1], parts[2]).getTime();
+}
+
+function formatCountdown(totalSec) {
+    if (totalSec <= 0) return '00:00';
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+function updateCountdowns() {
+    const now = Date.now();
+    document.querySelectorAll('.countdown-timer').forEach(el => {
+        const target = el.dataset.target;
+        if (!target) return;
+        const targetMs = parseTimeHMSToTodayDate(target);
+        const remainSec = Math.max(0, Math.floor((targetMs - now) / 1000));
+        el.textContent = remainSec > 0 ? formatCountdown(remainSec) : (el.closest('[data-state]')?.dataset.state === 'RESTING' ? '已结束' : '即将关闭');
+    });
+}
+
+setInterval(updateCountdowns, 1000);
+
+async function toggleTVMonitor() {
+    const btn = document.getElementById('tvToggleBtn');
+    const dot = document.getElementById('tvToggleDot');
+    const label = document.getElementById('tvToggleLabel');
+    const originText = label.innerText;
+    btn.disabled = true;
+    label.innerText = '切换中...';
+
+    try {
+        const resp = await fetch('/api/tvmonitor/toggle', {method: 'POST'});
+        const data = await resp.json();
+        if (resp.ok) {
+            const enabled = data.enabled;
+            btn.dataset.enabled = String(enabled);
+            label.innerText = enabled ? '监控中' : '已关闭';
+            dot.className = `w-2 h-2 rounded-full ${enabled ? 'bg-green-500' : 'bg-gray-400'}`;
+            btn.className = `flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm transition-all duration-200 active:scale-95 ${enabled ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100' : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'}`;
+            // Show/hide content area only, keep header with toggle button visible
+            const content = document.getElementById('tvmonitor-content');
+            if (enabled) {
+                content.classList.remove('hidden');
+                loadTVMonitorStatus();
+                loadTVMonitorLogs();
+            } else {
+                content.classList.add('hidden');
+            }
+        } else {
+            alert('操作失败: ' + data.error);
+            label.innerText = originText;
+        }
+    } catch (e) {
+        alert('请求失败: ' + e.message);
+        label.innerText = originText;
+    }
+    btn.disabled = false;
+}
+
 async function loadTVMonitorStatus() {
     try {
         const resp = await fetch('/api/tvmonitor/status');
@@ -1558,30 +1623,33 @@ async function loadTVMonitorStatus() {
 
         statuses.forEach(s => {
             const stateColors = {
-                'IDLE': 'bg-gray-100 text-gray-600 border-gray-200',
-                'WATCHING': 'bg-green-50 text-green-700 border-green-200',
+                'OFF': 'bg-gray-100 text-gray-600 border-gray-200',
+                'PENDING': 'bg-blue-50 text-blue-700 border-blue-200',
+                'TRIGGERED': 'bg-red-50 text-red-700 border-red-200',
                 'RESTING': 'bg-amber-50 text-amber-700 border-amber-200',
                 'NO_ROI': 'bg-blue-50 text-blue-700 border-blue-200',
                 'ERROR': 'bg-red-50 text-red-700 border-red-200'
             };
             const stateLabels = {
-                'IDLE': '空闲',
-                'WATCHING': '观看中',
+                'OFF': '关机',
+                'PENDING': '观看中',
+                'TRIGGERED': '已超时',
                 'RESTING': '休息中',
                 'NO_ROI': '未就绪',
                 'ERROR': '异常'
             };
             const stateDots = {
-                'IDLE': 'bg-gray-400',
-                'WATCHING': 'bg-green-500 animate-pulse',
+                'OFF': 'bg-gray-400',
+                'PENDING': 'bg-blue-500 animate-pulse',
+                'TRIGGERED': 'bg-red-500 animate-pulse',
                 'RESTING': 'bg-amber-500',
                 'NO_ROI': 'bg-blue-400',
                 'ERROR': 'bg-red-500'
             };
 
-            const colorClass = stateColors[s.state] || stateColors['IDLE'];
+            const colorClass = stateColors[s.state] || stateColors['OFF'];
             const label = stateLabels[s.state] || s.state;
-            const dotClass = stateDots[s.state] || stateDots['IDLE'];
+            const dotClass = stateDots[s.state] || stateDots['OFF'];
 
             let cardContent = '';
 
@@ -1610,15 +1678,25 @@ async function loadTVMonitorStatus() {
                 const dailyColor = dailyPercent > 80 ? 'bg-red-500' : dailyPercent > 50 ? 'bg-amber-400' : 'bg-green-500';
 
                 let details = '';
-                if (s.state === 'WATCHING') {
+                if (s.state === 'PENDING') {
+                    const remainSec = s.session_target ? Math.max(0, Math.floor((parseTimeHMSToTodayDate(s.session_target) - Date.now()) / 1000)) : 0;
+                    const remainText = remainSec > 0 ? formatCountdown(remainSec) : '即将关闭';
                     details = `
                         <div class="text-xs text-gray-500 mt-2 space-y-1">
                             <div>当前会话: <span class="font-bold text-gray-700">${s.session_mins.toFixed(1)}</span> / ${s.max_session_mins.toFixed(0)} 分钟</div>
+                            <div>剩余可看: <span class="countdown-timer font-bold text-blue-600" data-target="${s.session_target || ''}">${remainText}</span></div>
+                        </div>`;
+                } else if (s.state === 'TRIGGERED') {
+                    details = `
+                        <div class="text-xs text-red-600 mt-2 space-y-1 font-bold">
+                            <div>观看时间已超限，正在关闭电视</div>
                         </div>`;
                 } else if (s.state === 'RESTING') {
+                    const restRemainSec = s.rest_target ? Math.max(0, Math.floor((parseTimeHMSToTodayDate(s.rest_target) - Date.now()) / 1000)) : 0;
+                    const restRemainText = restRemainSec > 0 ? formatCountdown(restRemainSec) : '已结束';
                     details = `
                         <div class="text-xs text-gray-500 mt-2 space-y-1">
-                            <div>休息剩余: <span class="font-bold text-amber-600">${s.rest_remaining.toFixed(1)}</span> 分钟</div>
+                            <div>休息剩余: <span class="countdown-timer font-bold text-amber-600" data-target="${s.rest_target || ''}">${restRemainText}</span></div>
                         </div>`;
                 }
                 if (s.daily_locked) {
@@ -1648,6 +1726,7 @@ async function loadTVMonitorStatus() {
 
             const card = document.createElement('div');
             card.className = `rounded-lg border p-4 ${colorClass} transition-all`;
+            card.dataset.state = s.state;
             card.innerHTML = cardContent + `<div class="text-[10px] text-gray-400 mt-2 text-right">更新于 ${s.last_updated}</div>`;
             container.appendChild(card);
         });

@@ -194,13 +194,19 @@
         </div>
     </div>
 
-    <div id="tvmonitor-section" class="{{ if .TVMonitorEnabled }}bg-white{{ else }}hidden{{ end }} p-6 rounded-xl shadow-sm border-t-4 border-purple-500 mb-6">
+    <div id="tvmonitor-section" class="bg-white p-6 rounded-xl shadow-sm border-t-4 border-purple-500 mb-6">
         <div class="flex items-center justify-between mb-5">
             <h2 class="font-bold text-lg text-gray-700 flex items-center">
                 <svg class="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
                 电视观看监控
             </h2>
+            <button id="tvToggleBtn" onclick="toggleTVMonitor()" data-enabled="{{ .TVMonitorEnabled }}"
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm transition-all duration-200 active:scale-95 {{ if .TVMonitorEnabled }}bg-green-50 text-green-700 border-green-200 hover:bg-green-100{{ else }}bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100{{ end }}">
+                <div id="tvToggleDot" class="w-2 h-2 rounded-full {{ if .TVMonitorEnabled }}bg-green-500{{ else }}bg-gray-400{{ end }}"></div>
+                <span id="tvToggleLabel">{{ if .TVMonitorEnabled }}监控中{{ else }}已关闭{{ end }}</span>
+            </button>
         </div>
+        <div id="tvmonitor-content" class="{{ if not .TVMonitorEnabled }}hidden{{ end }}">
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <div>
                 <h3 class="text-sm font-bold text-gray-600 mb-3">实时状态</h3>
@@ -250,6 +256,7 @@
                     <div class="text-sm text-gray-400 text-center py-6">暂无日志</div>
                 </div>
             </div>
+        </div>
         </div>
     </div>
 

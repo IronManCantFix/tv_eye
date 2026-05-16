@@ -1,24 +1,28 @@
 package tvmonitor
 
 import (
-	"log"
 	"sync"
 	"time"
 )
 
 type MonitorStatus struct {
-	CameraID       string  `json:"camera_id"`
-	State          string  `json:"state"`
-	TVOn           bool    `json:"tv_on"`
-	Message        string  `json:"message,omitempty"`
-	SessionStart   string  `json:"session_start,omitempty"`
-	DailyMinutes   float64 `json:"daily_minutes"`
-	MaxDailyMins   float64 `json:"max_daily_mins"`
-	SessionMins    float64 `json:"session_mins,omitempty"`
-	MaxSessionMins float64 `json:"max_session_mins"`
-	RestRemaining  float64 `json:"rest_remaining,omitempty"`
-	DailyLocked    bool    `json:"daily_locked"`
-	LastUpdated    string  `json:"last_updated"`
+	CameraID         string  `json:"camera_id"`
+	State            string  `json:"state"`
+	TVOn             bool    `json:"tv_on"`
+	Message          string  `json:"message,omitempty"`
+	SessionStart     string  `json:"session_start,omitempty"`
+	DailyMinutes     float64 `json:"daily_minutes"`
+	MaxDailyMins     float64 `json:"max_daily_mins"`
+	SessionMins      float64 `json:"session_mins,omitempty"`
+	MaxSessionMins   float64 `json:"max_session_mins"`
+	TargetDuration   int     `json:"target_duration"`
+	SessionTarget    string  `json:"session_target,omitempty"` // "HH:MM:SS" countdown target
+	RestRemaining    float64 `json:"rest_remaining,omitempty"`
+	RestMinutes      float64 `json:"rest_minutes"`
+	RestTarget       string  `json:"rest_target,omitempty"` // "HH:MM:SS" countdown target
+	DailyLocked      bool    `json:"daily_locked"`
+	LastUpdated      string  `json:"last_updated"`
+	Metrics          Metrics `json:"metrics"`
 }
 
 type LogEntry struct {
@@ -32,23 +36,27 @@ type LogEntry struct {
 const maxLogs = 200
 
 var (
-	statusMap   = make(map[string]*MonitorStatus)
-	statusMux   sync.RWMutex
-	logEntries  []LogEntry
-	logMux      sync.RWMutex
-	snapshotMap = make(map[string][]byte)
-	snapshotMux sync.RWMutex
+	statusMap      = make(map[string]*MonitorStatus)
+	statusMux      sync.RWMutex
+	logEntries     []LogEntry
+	logMux         sync.RWMutex
+	snapshotMap    = make(map[string][]byte)
+	snapshotMux    sync.RWMutex
+	snapshotReqMap = make(map[string]bool)
+	snapshotReqMux sync.Mutex
 )
 
-func RegisterMonitor(cameraID string, maxSession, maxDaily float64) {
+func RegisterMonitor(cameraID string, maxSession, maxDaily, restMinutes float64, targetDuration int) {
 	statusMux.Lock()
 	defer statusMux.Unlock()
 	statusMap[cameraID] = &MonitorStatus{
-		CameraID:      cameraID,
-		State:         "IDLE",
+		CameraID:       cameraID,
+		State:          StateOff.String(),
 		MaxSessionMins: maxSession,
-		MaxDailyMins:  maxDaily,
-		LastUpdated:   time.Now().Format("15:04:05"),
+		MaxDailyMins:   maxDaily,
+		RestMinutes:    restMinutes,
+		TargetDuration: targetDuration,
+		LastUpdated:    time.Now().Format("15:04:05"),
 	}
 }
 
@@ -58,7 +66,7 @@ func UnregisterMonitor(cameraID string) {
 	delete(statusMap, cameraID)
 }
 
-func UpdateMonitorStatus(cameraID string, state MonitorState, tvOn bool, sessionStart time.Time, dailyMinutes float64, restStart time.Time, dailyLocked bool) {
+func UpdateMonitorStatus(cameraID string, state State, tvOn bool, sessionStart time.Time, dailyMinutes float64, restStart time.Time, dailyLocked bool, metrics Metrics) {
 	statusMux.Lock()
 	defer statusMux.Unlock()
 
@@ -71,23 +79,30 @@ func UpdateMonitorStatus(cameraID string, state MonitorState, tvOn bool, session
 	s.DailyMinutes = dailyMinutes
 	s.DailyLocked = dailyLocked
 	s.LastUpdated = time.Now().Format("15:04:05")
+	s.Metrics = metrics
 
-	if state == StateWatching && !sessionStart.IsZero() {
+	if (state == StatePending || state == StateTriggered) && !sessionStart.IsZero() {
 		s.SessionStart = sessionStart.Format("15:04:05")
 		s.SessionMins = time.Since(sessionStart).Minutes()
+		target := sessionStart.Add(time.Duration(s.TargetDuration) * time.Second)
+		s.SessionTarget = target.Format("15:04:05")
 	} else {
 		s.SessionStart = ""
 		s.SessionMins = 0
+		s.SessionTarget = ""
 	}
 
 	if state == StateResting && !restStart.IsZero() {
-		remaining := s.MaxSessionMins - time.Since(restStart).Minutes()
+		remaining := s.RestMinutes - time.Since(restStart).Minutes()
 		if remaining < 0 {
 			remaining = 0
 		}
 		s.RestRemaining = remaining
+		restEnd := restStart.Add(time.Duration(s.RestMinutes) * time.Minute)
+		s.RestTarget = restEnd.Format("15:04:05")
 	} else {
 		s.RestRemaining = 0
+		s.RestTarget = ""
 	}
 }
 
@@ -155,11 +170,26 @@ func ClearLogs() {
 	logEntries = nil
 }
 
+// RequestSnapshot sets a flag so the next tick generates a snapshot.
+func RequestSnapshot(cameraID string) {
+	snapshotReqMux.Lock()
+	defer snapshotReqMux.Unlock()
+	snapshotReqMap[cameraID] = true
+}
+
+// ConsumeSnapshotRequest checks and clears the snapshot request flag.
+func ConsumeSnapshotRequest(cameraID string) bool {
+	snapshotReqMux.Lock()
+	defer snapshotReqMux.Unlock()
+	v := snapshotReqMap[cameraID]
+	delete(snapshotReqMap, cameraID)
+	return v
+}
+
 func UpdateSnapshot(cameraID string, jpeg []byte) {
 	snapshotMux.Lock()
 	defer snapshotMux.Unlock()
 	snapshotMap[cameraID] = jpeg
-	log.Printf("[tvmonitor] snapshot updated: %s (%d bytes)", cameraID, len(jpeg))
 }
 
 func GetSnapshot(cameraID string) ([]byte, bool) {

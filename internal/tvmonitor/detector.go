@@ -13,27 +13,182 @@ import (
 	"gocv.io/x/gocv"
 )
 
-type Detector struct {
-	config          constant.TVMonitorConfig
-	perspectMat     gocv.Mat
-	warpSize        image.Point
-	roiPoints       [4]image.Point // pixel coords for drawing (TL, TR, BR, BL)
-	onCount         int
-	offCount        int
-	lastStableState  bool
-	lastLaplacianVar float64
-	lastBrightness   float64
+// CalibrateInterval is the time between baseline calibration frames.
+const CalibrateInterval = 500 * time.Millisecond
+
+type Metrics struct {
+	VMean     float64
+	SMean     float64
+	LapVar    float64 // Laplacian standard deviation (not variance; kept for API compat)
+	FrameDiff float64
 }
 
-const debounceCount = 3
+type Detector struct {
+	config      constant.TVMonitorConfig
+	perspectMat gocv.Mat
+	warpSize    image.Point
+	roiPoints   [4]image.Point
+
+	prevGray gocv.Mat
+	hasPrev  bool
+
+	vThreshold    float64
+	edgeThreshold float64
+
+	lastRawOn  bool
+	lastMetrics Metrics
+}
 
 func NewDetector(cfg constant.TVMonitorConfig, frameWidth, frameHeight int) *Detector {
-	d := &Detector{config: cfg}
+	d := &Detector{
+		config:        cfg,
+		vThreshold:    cfg.BrightnessThreshold,
+		edgeThreshold: cfg.EdgeThreshold,
+	}
 	d.buildPerspectiveTransform(frameWidth, frameHeight)
 	return d
 }
 
-// buildPerspectiveTransform builds a perspective transform matrix from the 4 ROI vertices.
+// CalibrateBaseline collects baseline metrics from frames captured while TV is off.
+func (d *Detector) CalibrateBaseline(cap *gocv.VideoCapture, numFrames int) error {
+	var sumV, sumLap float64
+	count := 0
+
+	for i := 0; i < numFrames; i++ {
+		if i > 0 {
+			time.Sleep(CalibrateInterval)
+		}
+		frame := gocv.NewMat()
+		if ok := cap.Read(&frame); !ok || frame.Empty() {
+			frame.Close()
+			continue
+		}
+
+		warped := gocv.NewMat()
+		gocv.WarpPerspective(frame, &warped, d.perspectMat, d.warpSize)
+		frame.Close()
+
+		vMean, _, lapStdDev := d.computeMetrics(warped)
+		warped.Close()
+
+		sumV += vMean
+		sumLap += lapStdDev
+		count++
+	}
+
+	if count < 3 {
+		return fmt.Errorf("only collected %d valid frames (need at least 3)", count)
+	}
+
+	baselineV := sumV / float64(count)
+	baselineLap := sumLap / float64(count)
+
+	adaptiveV := baselineV * 1.5
+	adaptiveEdge := baselineLap * 2.0
+
+	if adaptiveV > d.vThreshold {
+		d.vThreshold = adaptiveV
+	}
+	if adaptiveEdge > d.edgeThreshold {
+		d.edgeThreshold = adaptiveEdge
+	}
+
+	log.Printf("[tvmonitor] Baseline calibrated: V=%.1f->threshold=%.1f, Lap=%.1f->threshold=%.1f (%d frames)",
+		baselineV, d.vThreshold, baselineLap, d.edgeThreshold, count)
+	return nil
+}
+
+// TVState analyzes the frame and returns whether the TV appears to be on, along with detailed metrics.
+func (d *Detector) TVState(frame gocv.Mat) (bool, Metrics) {
+	warped := gocv.NewMat()
+	defer warped.Close()
+	gocv.WarpPerspective(frame, &warped, d.perspectMat, d.warpSize)
+
+	vMean, sMean, lapStdDev := d.computeMetrics(warped)
+
+	// Frame diff using pre-allocated prevGray
+	gray := gocv.NewMat()
+	gocv.CvtColor(warped, &gray, gocv.ColorBGRToGray)
+	gocv.GaussianBlur(gray, &gray, image.Pt(3, 3), 0, 0, gocv.BorderDefault)
+
+	var frameDiff float64
+	if d.hasPrev {
+		diff := gocv.NewMat()
+		gocv.AbsDiff(gray, d.prevGray, &diff)
+		frameDiff = diff.Mean().Val1
+		diff.Close()
+	}
+	// Reuse prevGray allocation via CopyTo
+	if d.prevGray.Ptr() == nil || d.prevGray.Rows() != gray.Rows() || d.prevGray.Cols() != gray.Cols() {
+		d.prevGray.Close()
+		d.prevGray = gray.Clone()
+	} else {
+		gray.CopyTo(&d.prevGray)
+	}
+	gray.Close()
+	d.hasPrev = true
+
+	metrics := Metrics{
+		VMean:     vMean,
+		SMean:     sMean,
+		LapVar:    lapStdDev,
+		FrameDiff: frameDiff,
+	}
+	d.lastMetrics = metrics
+
+	brightnessOK := vMean > d.vThreshold
+	edgeOK := lapStdDev > d.edgeThreshold
+	colorOK := sMean > d.config.SaturationThreshold
+	motionOK := frameDiff > d.config.MotionThreshold
+
+	rawOn := brightnessOK && edgeOK && (colorOK || motionOK)
+	d.lastRawOn = rawOn
+	return rawOn, metrics
+}
+
+// computeMetrics extracts V mean, S mean, and Laplacian variance from a warped frame.
+func (d *Detector) computeMetrics(warped gocv.Mat) (vMean, sMean, lapStdDev float64) {
+	hsv := gocv.NewMat()
+	gocv.CvtColor(warped, &hsv, gocv.ColorBGRToHSV)
+	defer hsv.Close()
+
+	hsvMean := hsv.Mean()
+	sMean = hsvMean.Val2 // S channel (channel 1)
+	vMean = hsvMean.Val3 // V channel (channel 2)
+
+	gray := gocv.NewMat()
+	gocv.CvtColor(warped, &gray, gocv.ColorBGRToGray)
+	defer gray.Close()
+	gocv.GaussianBlur(gray, &gray, image.Pt(3, 3), 0, 0, gocv.BorderDefault)
+
+	laplacian := gocv.NewMat()
+	gocv.Laplacian(gray, &laplacian, gocv.MatTypeCV64F, 3, 1.0, 0.0, gocv.BorderDefault)
+	defer laplacian.Close()
+
+	mean := gocv.NewMat()
+	stdDev := gocv.NewMat()
+	gocv.MeanStdDev(laplacian, &mean, &stdDev)
+	defer mean.Close()
+	defer stdDev.Close()
+	lapStdDev = stdDev.GetDoubleAt(0, 0)
+	return
+}
+
+func (d *Detector) LastMetrics() Metrics {
+	return d.lastMetrics
+}
+
+// Close releases gocv resources.
+func (d *Detector) Close() {
+	if !d.perspectMat.Empty() {
+		d.perspectMat.Close()
+	}
+	if d.hasPrev {
+		d.prevGray.Close()
+		d.hasPrev = false
+	}
+}
+
 func (d *Detector) buildPerspectiveTransform(w, h int) {
 	tl := image.Pt(int(d.config.ROITopLeft[0]*float64(w)), int(d.config.ROITopLeft[1]*float64(h)))
 	tr := image.Pt(int(d.config.ROITopRight[0]*float64(w)), int(d.config.ROITopRight[1]*float64(h)))
@@ -42,7 +197,6 @@ func (d *Detector) buildPerspectiveTransform(w, h int) {
 
 	d.roiPoints = [4]image.Point{tl, tr, br, bl}
 
-	// Target rectangle size: max of opposite edges
 	dstW := int(math.Max(ptDist(tl, tr), ptDist(bl, br)))
 	dstH := int(math.Max(ptDist(tl, bl), ptDist(tr, br)))
 	if dstW <= 0 {
@@ -76,79 +230,7 @@ func ptDist(a, b image.Point) float64 {
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
-// TVState returns true if the TV appears to be on in the given frame.
-func (d *Detector) TVState(frame gocv.Mat) bool {
-	warped := gocv.NewMat()
-	defer warped.Close()
-	gocv.WarpPerspective(frame, &warped, d.perspectMat, d.warpSize)
-
-	gray := gocv.NewMat()
-	defer gray.Close()
-	gocv.CvtColor(warped, &gray, gocv.ColorBGRToGray)
-	gocv.GaussianBlur(gray, &gray, image.Pt(3, 3), 0, 0, gocv.BorderDefault)
-
-	laplacian := gocv.NewMat()
-	defer laplacian.Close()
-	gocv.Laplacian(gray, &laplacian, gocv.MatTypeCV64F, 3, 1.0, 0.0, gocv.BorderDefault)
-
-	mean := gocv.NewMat()
-	stdDev := gocv.NewMat()
-	defer mean.Close()
-	defer stdDev.Close()
-	gocv.MeanStdDev(laplacian, &mean, &stdDev)
-
-	stdDevF := gocv.NewMat()
-	defer stdDevF.Close()
-	stdDev.ConvertTo(&stdDevF, gocv.MatTypeCV32F)
-	lapVar := float64(stdDevF.GetFloatAt(0, 0))
-	d.lastLaplacianVar = lapVar
-
-	// Also compute average brightness of the ROI region
-	brightnessMean := gocv.NewMat()
-	brightnessStdDev := gocv.NewMat()
-	defer brightnessMean.Close()
-	defer brightnessStdDev.Close()
-	gocv.MeanStdDev(gray, &brightnessMean, &brightnessStdDev)
-	brightnessMeanF := gocv.NewMat()
-	defer brightnessMeanF.Close()
-	brightnessMean.ConvertTo(&brightnessMeanF, gocv.MatTypeCV32F)
-	avgBrightness := float64(brightnessMeanF.GetFloatAt(0, 0))
-	d.lastBrightness = avgBrightness
-
-	// TV is considered ON only when BOTH conditions are met:
-	// 1. Laplacian variance exceeds threshold (texture/content present)
-	// 2. Average brightness is above a minimum (screen is emitting light)
-	// This avoids false positives from ambient light reflections on a dark/off screen.
-	tvOn := lapVar > d.config.BrightnessThreshold && avgBrightness > 15
-
-	if tvOn {
-		d.onCount++
-		d.offCount = 0
-	} else {
-		d.offCount++
-		d.onCount = 0
-	}
-
-	if d.onCount >= debounceCount {
-		d.lastStableState = true
-	} else if d.offCount >= debounceCount {
-		d.lastStableState = false
-	}
-
-	log.Printf("[tvmonitor] TVState: raw=%v lapVar=%.1f brightness=%.1f threshold=%.1f onCount=%d offCount=%d stable=%v",
-		tvOn, lapVar, avgBrightness, d.config.BrightnessThreshold, d.onCount, d.offCount, d.lastStableState)
-
-	return d.lastStableState
-}
-
-// Close releases gocv resources.
-func (d *Detector) Close() {
-	if !d.perspectMat.Empty() {
-		d.perspectMat.Close()
-	}
-}
-
-// DrawROI draws the ROI quadrilateral on a copy of the frame and returns JPEG bytes.
+// DrawROI draws the ROI quadrilateral and metrics on a copy of the frame.
 func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	annotated := frame.Clone()
 	defer annotated.Close()
@@ -157,7 +239,7 @@ func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	red := color.RGBA{R: 255, A: 255}
 	boxColor := green
 	stateLabel := "TV OFF"
-	if d.lastStableState {
+	if d.lastRawOn {
 		boxColor = red
 		stateLabel = "TV ON"
 	}
@@ -176,7 +258,8 @@ func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	gocv.PutText(&annotated, stateLabel, labelPos, gocv.FontHersheyPlain, 1.5, boxColor, 2)
 
 	infoPos := image.Pt(pts[3].X, pts[3].Y+18)
-	gocv.PutText(&annotated, fmt.Sprintf("LAP:%.1f BRI:%.0f", d.lastLaplacianVar, d.lastBrightness), infoPos, gocv.FontHersheyPlain, 1.2, boxColor, 1)
+	m := d.lastMetrics
+	gocv.PutText(&annotated, fmt.Sprintf("V:%.0f LAP:%.1f S:%.0f D:%.0f", m.VMean, m.LapVar, m.SMean, m.FrameDiff), infoPos, gocv.FontHersheyPlain, 1.2, boxColor, 1)
 
 	timePos := image.Pt(10, annotated.Rows()-10)
 	gocv.PutText(&annotated, time.Now().Format("15:04:05"), timePos, gocv.FontHersheyPlain, 1.5, color.RGBA{R: 255, G: 255, B: 255, A: 200}, 2)
@@ -189,8 +272,7 @@ func (d *Detector) DrawROI(frame gocv.Mat) []byte {
 	return buf.GetBytes()
 }
 
-// AutoCalibrateROI attempts to detect the TV screen as the largest quadrilateral
-// in the frame. Returns 4 ordered ROI vertices: top-left, top-right, bottom-right, bottom-left.
+// AutoCalibrateROI attempts to detect the TV screen as the largest quadrilateral in the frame.
 func AutoCalibrateROI(rtspURL string, fw, fh float64) (tl, tr, br, bl constant.ROIPoint, err error) {
 	cap, err := gocv.OpenVideoCapture(rtspURL)
 	if err != nil {
@@ -241,7 +323,6 @@ func AutoCalibrateROI(rtspURL string, fw, fh float64) (tl, tr, br, bl constant.R
 		return tl, tr, br, bl, fmt.Errorf("no suitable quadrilateral found (best area ratio: %.2f)", bestArea)
 	}
 
-	// Sort points: TL, TR, BR, BL
 	sorted := orderQuadPoints(bestPoints)
 
 	tl = constant.ROIPoint{float64(sorted[0].X) / fw, float64(sorted[0].Y) / fh}
@@ -254,9 +335,7 @@ func AutoCalibrateROI(rtspURL string, fw, fh float64) (tl, tr, br, bl constant.R
 	return
 }
 
-// orderQuadPoints sorts 4 points into TL, TR, BR, BL order.
 func orderQuadPoints(pts []image.Point) []image.Point {
-	// Sort by Y, then split into top pair and bottom pair
 	sorted := make([]image.Point, 4)
 	copy(sorted, pts)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -266,11 +345,9 @@ func orderQuadPoints(pts []image.Point) []image.Point {
 	top := sorted[:2]
 	bottom := sorted[2:]
 
-	// Top pair: smaller X = TL, larger X = TR
 	if top[0].X > top[1].X {
 		top[0], top[1] = top[1], top[0]
 	}
-	// Bottom pair: smaller X = BL, larger X = BR
 	if bottom[0].X > bottom[1].X {
 		bottom[0], bottom[1] = bottom[1], bottom[0]
 	}

@@ -12,49 +12,35 @@ import (
 	"gocv.io/x/gocv"
 )
 
-type MonitorState int
-
-const (
-	StateIdle MonitorState = iota
-	StateWatching
-	StateResting
-)
-
-func (s MonitorState) String() string {
-	switch s {
-	case StateWatching:
-		return "WATCHING"
-	case StateResting:
-		return "RESTING"
-	default:
-		return "IDLE"
-	}
-}
+// haCooldown limits HA calls to at most once per this duration.
+const haCooldown = 30 * time.Second
 
 type TVMonitor struct {
 	config       constant.TVMonitorConfig
 	rtspURL      string
-	state        MonitorState
+	sm           *StateMachine
+	ha           *HAClient
+	detector     *Detector
+
 	sessionStart time.Time
 	dailyMinutes float64
 	lastDate     string
 	restStart    time.Time
 	dailyLocked  bool
-	ha           *HAClient
-	detector     *Detector
-	restHandled  bool // prevents repeated HA calls during rest violations
-	tickCount    int
-	mu           sync.Mutex
+	tickCount            int
+	restViolationLogged  bool
+	mu                   sync.Mutex
+
+	lastHACall   time.Time
 }
 
 func NewTVMonitor(cfg constant.TVMonitorConfig, rtspURL string) *TVMonitor {
 	m := &TVMonitor{
 		config:  cfg,
 		rtspURL: rtspURL,
-		state:   StateIdle,
 		ha:      NewHAClient(cfg),
 	}
-	RegisterMonitor(cfg.CameraID, cfg.MaxSessionMinutes, cfg.MaxDailyMinutes)
+	RegisterMonitor(cfg.CameraID, cfg.MaxSessionMinutes, cfg.MaxDailyMinutes, cfg.RestMinutes, cfg.TargetDuration)
 	return m
 }
 
@@ -64,8 +50,14 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 	defer UnregisterMonitor(m.config.CameraID)
 	defer RemoveSnapshot(m.config.CameraID)
 
-	log.Printf("[tvmonitor:%s] Starting monitor (session=%.0fm, rest=%.0fm, daily=%.0fm)",
-		m.config.CameraID, m.config.MaxSessionMinutes, m.config.RestMinutes, m.config.MaxDailyMinutes)
+	triggerFrames := m.config.TargetDuration / m.config.CheckInterval
+	if triggerFrames < m.config.DebounceFrames {
+		triggerFrames = m.config.DebounceFrames
+	}
+	m.sm = NewStateMachine(m.config.DebounceFrames, triggerFrames)
+
+	log.Printf("[tvmonitor:%s] Starting monitor (trigger=%ds/%dframes, debounce=%d, rest=%.0fm, daily=%.0fm)",
+		m.config.CameraID, m.config.TargetDuration, triggerFrames, m.config.DebounceFrames, m.config.RestMinutes, m.config.MaxDailyMinutes)
 
 	// Try auto-calibrate if ROI is zero and auto_calibrate is enabled
 	if m.config.ROIAutoCalibrate && (m.config.ROITopLeft.IsZero() && m.config.ROITopRight.IsZero()) {
@@ -89,10 +81,10 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 		}
 	}
 
-	// If no valid ROI, enter waiting state and retry periodically
+	// If no valid ROI, enter waiting state
 	if m.config.ROITopLeft.IsZero() && m.config.ROITopRight.IsZero() && m.config.ROIBottomRight.IsZero() && m.config.ROIBottomLeft.IsZero() {
 		log.Printf("[tvmonitor:%s] No valid ROI configured, waiting for manual configuration", m.config.CameraID)
-		SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_top_left/roi_top_right/roi_bottom_left/roi_bottom_right，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
+		SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 ROI，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
 		m.waitForROIRetry(ctx)
 		return
 	}
@@ -107,14 +99,10 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 	var frame gocv.Mat
 	var detector *Detector
 
-	// reconnectAttempts counts consecutive failures; triggers reconnect after threshold.
-	// Reset on any successful tick.
 	reconnectAttempts := 0
 	const maxFailures = 10
 
 	for {
-		// Ensure we have an open capture and a valid first frame.
-		// This loop handles initial connection and reconnection after stream failures.
 		if cap == nil || !cap.IsOpened() {
 			detector = nil
 			if frame.Ptr() != nil {
@@ -125,7 +113,6 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 				log.Printf("[tvmonitor:%s] Failed to open RTSP stream: %v", m.config.CameraID, err)
 				SetMonitorMessage(m.config.CameraID, "ERROR", "无法连接摄像头视频流，等待重试...")
 				cap = nil
-				// Wait before retrying
 				select {
 				case <-ctx.Done():
 					log.Printf("[tvmonitor:%s] Monitor stopped", m.config.CameraID)
@@ -155,8 +142,23 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 			frame = newFrame
 			detector = NewDetector(m.config, frame.Cols(), frame.Rows())
 			m.detector = detector
+
+			if m.config.AutoCalibrateBaseline {
+				log.Printf("[tvmonitor:%s] Collecting baseline (%d frames)...", m.config.CameraID, m.config.BaselineFrames)
+				if err := detector.CalibrateBaseline(cap, m.config.BaselineFrames); err != nil {
+					log.Printf("[tvmonitor:%s] Baseline calibration failed: %v (using fixed thresholds)", m.config.CameraID, err)
+				}
+				freshFrame := gocv.NewMat()
+				if ok := cap.Read(&freshFrame); ok && !freshFrame.Empty() {
+					frame.Close()
+					frame = freshFrame
+				} else {
+					freshFrame.Close()
+				}
+			}
+
 			log.Printf("[tvmonitor:%s] Stream connected successfully", m.config.CameraID)
-			SetMonitorMessage(m.config.CameraID, "IDLE", "")
+			SetMonitorMessage(m.config.CameraID, StateOff.String(), "")
 			reconnectAttempts = 0
 		}
 
@@ -177,7 +179,7 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 			if cap == nil {
 				continue
 			}
-			action := m.tick(cap, &frame)
+			action := m.tick(cap, &frame, detector)
 			if action == tickActionReconnect {
 				reconnectAttempts++
 				if reconnectAttempts >= maxFailures {
@@ -189,7 +191,6 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 					}
 					cap.Close()
 					cap = nil
-					// Next loop iteration will attempt to reconnect
 				}
 			} else {
 				reconnectAttempts = 0
@@ -199,7 +200,6 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // waitForROIRetry periodically attempts auto-calibration while waiting for a valid ROI.
-// This allows the monitor to become active if the TV becomes visible later.
 func (m *TVMonitor) waitForROIRetry(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -219,12 +219,12 @@ func (m *TVMonitor) waitForROIRetry(ctx context.Context) {
 						frame.Close()
 						if tl, tr, br, bl, err := AutoCalibrateROI(m.rtspURL, fw, fh); err != nil {
 							log.Printf("[tvmonitor:%s] Auto-calibration still failing: %v", m.config.CameraID, err)
-							SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 roi_top_left/roi_top_right/roi_bottom_left/roi_bottom_right，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
+							SetMonitorMessage(m.config.CameraID, "NO_ROI", "未配置电视区域。请在 conf.yaml 中设置 ROI，或确保摄像头画面中有明显的电视屏幕边框以启用自动校准。")
 						} else {
 							m.config.ROITopLeft, m.config.ROITopRight = tl, tr
 							m.config.ROIBottomRight, m.config.ROIBottomLeft = br, bl
 							log.Printf("[tvmonitor:%s] Auto-calibration succeeded on retry!", m.config.CameraID)
-							SetMonitorMessage(m.config.CameraID, "IDLE", "")
+							SetMonitorMessage(m.config.CameraID, StateOff.String(), "")
 							cap.Close()
 							return
 						}
@@ -245,7 +245,7 @@ const (
 	tickActionReconnect
 )
 
-func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
+func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Detector) tickAction {
 	m.mu.Lock()
 
 	// Daily reset at midnight
@@ -255,46 +255,44 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 		m.dailyMinutes = 0
 		m.dailyLocked = false
 		m.lastDate = today
-		if m.state == StateResting {
-			m.setState(StateIdle)
-		}
+		m.sm.ForceOff()
 	}
 
-	// Outside monitor time range: reset to IDLE and push status so frontend doesn't freeze
+	// Outside monitor time range
 	if !util.IsWithinTimeRange(m.config.MonitorTime) {
-		if m.state != StateIdle {
-			m.setState(StateIdle)
+		if m.sm.State() != StateOff {
+			m.sm.ForceOff()
+			AddLog(m.config.CameraID, "out_of_range", "超出监控时间范围，状态重置")
 		}
-		UpdateMonitorStatus(m.config.CameraID, m.state, false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
+		UpdateMonitorStatus(m.config.CameraID, m.sm.State(), false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked, Metrics{})
 		m.mu.Unlock()
 		return tickActionNone
 	}
 
-	// Drain buffered frames: Grab (skip without decoding) is much faster than Read
+	// Drain buffered frames
 	fps := cap.Get(gocv.VideoCaptureFPS)
-	if fps < 1 { fps = 25 }
+	if fps < 1 {
+		fps = 25
+	}
 	staleFrames := int(fps * float64(m.config.CheckInterval))
-	// Grab skips frames without decoding - very fast
 	if staleFrames > 1 {
 		cap.Grab(staleFrames - 1)
 	}
-	// Retrieve the latest frame (decode only this one)
 	if !cap.Retrieve(frame) || frame.Empty() {
-		UpdateMonitorStatus(m.config.CameraID, m.state, false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
+		UpdateMonitorStatus(m.config.CameraID, m.sm.State(), false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked, Metrics{})
 		m.mu.Unlock()
 		return tickActionReconnect
 	}
 
-	tvOn := m.detector.TVState(*frame)
+	rawOn, metrics := detector.TVState(*frame)
 
-	if jpeg := m.detector.DrawROI(*frame); jpeg != nil {
-		UpdateSnapshot(m.config.CameraID, jpeg)
+	// On-demand snapshot: only generate when frontend requests it
+	if ConsumeSnapshotRequest(m.config.CameraID) {
+		if jpeg := detector.DrawROI(*frame); jpeg != nil {
+			UpdateSnapshot(m.config.CameraID, jpeg)
+		}
 	}
 
-	log.Printf("[tvmonitor:%s] tick: tvOn=%v lapVar=%.1f state=%s",
-		m.config.CameraID, tvOn, m.detector.lastLaplacianVar, m.state)
-
-	// Log detect result based on log_level config
 	m.tickCount++
 	logLevel := m.config.LogLevel
 	if logLevel == "" {
@@ -302,105 +300,130 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat) tickAction {
 	}
 	switch logLevel {
 	case "tick":
-		AddLog(m.config.CameraID, "detect", fmt.Sprintf("检测: %s (LAP:%.1f)", map[bool]string{true: "开启", false: "关闭"}[tvOn], m.detector.lastLaplacianVar))
+		AddLog(m.config.CameraID, "detect", fmt.Sprintf("检测: %s (V:%.0f Lap:%.1f S:%.0f D:%.0f)",
+			map[bool]string{true: "开启", false: "关闭"}[rawOn], metrics.VMean, metrics.LapVar, metrics.SMean, metrics.FrameDiff))
+		log.Printf("[tvmonitor:%s] tick: rawOn=%v state=%s onFrame=%d",
+			m.config.CameraID, rawOn, m.sm.State(), m.sm.OnFrameCount())
 	case "summary":
-		// Log every 5 minutes (20 ticks at 15s interval)
-		if m.tickCount % 20 == 0 {
-			AddLog(m.config.CameraID, "detect", fmt.Sprintf("定时摘要: %s (LAP:%.1f)", map[bool]string{true: "开启", false: "关闭"}[tvOn], m.detector.lastLaplacianVar))
+		if m.tickCount%20 == 0 {
+			AddLog(m.config.CameraID, "detect", fmt.Sprintf("定时摘要: %s (V:%.0f Lap:%.1f)",
+				map[bool]string{true: "开启", false: "关闭"}[rawOn], metrics.VMean, metrics.LapVar))
 		}
-	default: // "state" - no log for routine detection, only state changes logged below
 	}
 
+	// Run state machine
+	prevState := m.sm.State()
+	newState, shouldTrigger := m.sm.Update(rawOn)
 
-	// Collect HA actions to perform outside the lock
+	// Track daily viewing time based on debounced state (not rawOn)
+	if newState == StatePending || newState == StateTriggered {
+		m.dailyMinutes += float64(m.config.CheckInterval) / 60.0
+	}
+
+	// Collect HA action to perform outside the lock
 	var haAction func()
 
-	switch m.state {
-	case StateIdle:
-		if tvOn {
-			log.Printf("[tvmonitor:%s] TV detected ON", m.config.CameraID)
+	if newState != prevState {
+		log.Printf("[tvmonitor:%s] State: %s → %s", m.config.CameraID, prevState, newState)
+	}
+
+	switch newState {
+	case StateOff:
+		if prevState == StatePending || prevState == StateTriggered {
+			AddLog(m.config.CameraID, "tv_off", "电视已关闭")
+		}
+
+	case StatePending:
+		if prevState == StateOff {
 			m.sessionStart = time.Now()
-			m.dailyMinutes += float64(m.config.CheckInterval) / 60.0
-			m.setState(StateWatching)
 			AddLog(m.config.CameraID, "tv_on", "检测到电视开机，开始计时")
 		}
 
-	case StateWatching:
-		if !tvOn {
-			log.Printf("[tvmonitor:%s] TV turned off naturally", m.config.CameraID)
-			m.setState(StateIdle)
-			AddLog(m.config.CameraID, "tv_off", "电视已关闭")
-		} else {
-			m.dailyMinutes += float64(m.config.CheckInterval) / 60.0
+	case StateTriggered:
+		if shouldTrigger {
 			sessionMin := time.Since(m.sessionStart).Minutes()
-
-			if m.dailyMinutes >= m.config.MaxDailyMinutes {
-				log.Printf("[tvmonitor:%s] Daily total %.1fmin exceeded limit %.0fmin, locked until midnight",
-					m.config.CameraID, m.dailyMinutes, m.config.MaxDailyMinutes)
-				m.dailyLocked = true
-				prefix := m.prefix()
-				msg := m.config.HATTSMessage
-				ha := m.ha
-				m.restStart = time.Now()
-				m.setState(StateResting)
-				m.restHandled = false
-				haAction = func() { ha.TriggerShutdown(prefix, msg) }
-				AddLog(m.config.CameraID, "daily_exceeded", fmt.Sprintf("今日观看 %.1f 分钟超限，锁定至次日零点", m.dailyMinutes))
-			} else if sessionMin >= m.config.MaxSessionMinutes {
-				log.Printf("[tvmonitor:%s] Session %.1fmin exceeded limit %.0fmin, turning off TV",
-					m.config.CameraID, sessionMin, m.config.MaxSessionMinutes)
-				prefix := m.prefix()
-				msg := m.config.HATTSMessage
-				ha := m.ha
-				m.restStart = time.Now()
-				m.setState(StateResting)
-				m.restHandled = false
-				haAction = func() { ha.TriggerShutdown(prefix, msg) }
-				AddLog(m.config.CameraID, "session_exceeded", fmt.Sprintf("单次观看 %.0f 分钟超限，关闭电视", m.config.MaxSessionMinutes))
+			if prevState == StatePending {
+				AddLog(m.config.CameraID, "session_exceeded", fmt.Sprintf("单次观看 %.0f 分钟超限，关闭电视", sessionMin))
+			} else {
+				AddLog(m.config.CameraID, "re_trigger", fmt.Sprintf("电视仍未关闭（已 %.0f 分钟），再次尝试关机", sessionMin))
 			}
+			haAction = m.makeHAAction("")
 		}
 
 	case StateResting:
-		if tvOn {
-			remaining := m.config.RestMinutes - time.Since(m.restStart).Minutes()
-			log.Printf("[tvmonitor:%s] TV on during rest (%.1fmin remaining), turning off",
-				m.config.CameraID, remaining)
-			prefix := m.prefix()
-			ha := m.ha
-			haAction = func() { ha.TriggerShutdown(prefix, "休息时间还没到哦，再等一下") }
-			if !m.restHandled {
-				AddLog(m.config.CameraID, "rest_violation", "休息期间电视被打开，持续关闭中")
-			}
-			m.restHandled = true
-		} else {
-			m.restHandled = false
+		if !m.sm.RestStartSet() {
+			m.restStart = time.Now()
+			m.sm.SetRestStartSet(true)
 		}
-
+		// Check if rest period has elapsed (and not daily locked)
 		restElapsed := time.Since(m.restStart).Minutes()
 		if restElapsed >= m.config.RestMinutes && !m.dailyLocked {
 			log.Printf("[tvmonitor:%s] Rest period complete, ready for next session", m.config.CameraID)
-			m.setState(StateIdle)
+			m.sm.ForceOff()
 			AddLog(m.config.CameraID, "rest_complete", "休息时间结束，可继续观看")
+		} else if rawOn {
+			// Rest violation: bypass cooldown to ensure TV is turned off immediately
+			haAction = m.forceShutdown("休息时间还没到哦，再等一下")
+			if !m.restViolationLogged {
+				AddLog(m.config.CameraID, "rest_violation", "休息期间电视被打开，持续关闭中")
+				m.restViolationLogged = true
+			}
+		} else {
+			m.restViolationLogged = false
 		}
 	}
 
-	UpdateMonitorStatus(m.config.CameraID, m.state, tvOn, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked)
+	// Daily limit check (overrides state machine)
+	// Skip if just exited resting to avoid re-entering rest immediately
+	if m.dailyMinutes >= m.config.MaxDailyMinutes && rawOn {
+		m.dailyLocked = true
+		if m.sm.State() != StateResting && newState != StateResting {
+			m.sm.ForceResting()
+			m.restStart = time.Now()
+			m.sm.SetRestStartSet(true)
+			haAction = m.forceShutdown("")
+			AddLog(m.config.CameraID, "daily_exceeded", fmt.Sprintf("今日观看 %.1f 分钟超限，锁定至次日零点", m.dailyMinutes))
+		}
+	}
+
+	UpdateMonitorStatus(m.config.CameraID, m.sm.State(), rawOn, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked, metrics)
 
 	m.mu.Unlock()
 
-	// Perform HA action outside the lock to avoid blocking state machine
+	// Execute HA action asynchronously with cooldown
 	if haAction != nil {
-		haAction()
+		go haAction()
 	}
 
 	return tickActionNone
 }
 
-func (m *TVMonitor) setState(s MonitorState) {
-	if m.state != s {
-		log.Printf("[tvmonitor:%s] State: %s → %s", m.config.CameraID, m.state, s)
-		m.state = s
+// makeHAAction returns an HA action closure, or nil if still within cooldown.
+func (m *TVMonitor) makeHAAction(ttsOverride string) func() {
+	if time.Since(m.lastHACall) < haCooldown {
+		return nil
 	}
+	m.lastHACall = time.Now()
+	prefix := m.prefix()
+	msg := m.config.HATTSMessage
+	ha := m.ha
+	if ttsOverride != "" {
+		return func() { ha.TriggerShutdown(prefix, ttsOverride) }
+	}
+	return func() { ha.TriggerShutdown(prefix, msg) }
+}
+
+// forceShutdown creates an HA action that bypasses the normal cooldown.
+// Used for rest violations where the TV must be turned off immediately.
+func (m *TVMonitor) forceShutdown(ttsOverride string) func() {
+	m.lastHACall = time.Now()
+	prefix := m.prefix()
+	msg := m.config.HATTSMessage
+	ha := m.ha
+	if ttsOverride != "" {
+		return func() { ha.TriggerShutdown(prefix, ttsOverride) }
+	}
+	return func() { ha.TriggerShutdown(prefix, msg) }
 }
 
 func (m *TVMonitor) prefix() string {

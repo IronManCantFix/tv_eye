@@ -61,6 +61,13 @@ type TVMonitorConfig struct {
 	CheckInterval       int     `yaml:"check_interval"`
 	BrightnessThreshold float64 `yaml:"brightness_threshold"`
 	FrameDiffThreshold  float64 `yaml:"frame_diff_threshold"`
+	EdgeThreshold       float64 `yaml:"edge_threshold"`
+	SaturationThreshold float64 `yaml:"saturation_threshold"`
+	MotionThreshold     float64 `yaml:"motion_threshold"`
+	TargetDuration      int     `yaml:"target_duration"`
+	DebounceFrames      int     `yaml:"debounce_frames"`
+	AutoCalibrateBaseline bool  `yaml:"auto_calibrate_baseline"`
+	BaselineFrames      int     `yaml:"baseline_frames"`
 	MaxSessionMinutes   float64 `yaml:"max_session_minutes"`
 	RestMinutes         float64 `yaml:"rest_minutes"`
 	MaxDailyMinutes     float64 `yaml:"max_daily_minutes"`
