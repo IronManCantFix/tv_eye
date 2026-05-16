@@ -1,0 +1,36 @@
+version: '1.0'
+name: pipeline-docker
+displayName: pipeline-docker
+triggers:
+  trigger: manual
+  push:
+    branches:
+      prefix:
+        - release
+variables:
+  VERSION: '2.0'
+stages:
+  - name: stage-8243fc17
+    displayName: docker-image
+    strategy: naturally
+    trigger: auto
+    executor: []
+    steps:
+      - step: build@docker
+        name: build_docker
+        displayName: 镜像构建
+        type: account
+        repository: crpi-4r2zz5ptdbnketcl.cn-hangzhou.personal.cr.aliyuncs.com/iron_hub
+        username: 471640241@qq.com
+        password: hhd286518
+        tag: camkeep:v${VERSION}
+        dockerfile: ./Dockerfile
+        context: ''
+        artifacts: []
+        isCache: false
+        processorType:
+          - amd64
+        parameter: {}
+        notify: []
+        strategy:
+          retry: '0'
