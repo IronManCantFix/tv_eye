@@ -21,6 +21,7 @@ type MonitorStatus struct {
 	RestMinutes      float64 `json:"rest_minutes"`
 	RestTarget       string  `json:"rest_target,omitempty"` // "HH:MM:SS" countdown target
 	DailyLocked      bool    `json:"daily_locked"`
+	MonitorTime      string  `json:"monitor_time"`
 	LastUpdated      string  `json:"last_updated"`
 	Metrics          Metrics `json:"metrics"`
 }
@@ -46,7 +47,7 @@ var (
 	snapshotReqMux sync.Mutex
 )
 
-func RegisterMonitor(cameraID string, maxSession, maxDaily, restMinutes float64, targetDuration int) {
+func RegisterMonitor(cameraID string, maxSession, maxDaily, restMinutes float64, targetDuration int, monitorTime string) {
 	statusMux.Lock()
 	defer statusMux.Unlock()
 	statusMap[cameraID] = &MonitorStatus{
@@ -56,6 +57,7 @@ func RegisterMonitor(cameraID string, maxSession, maxDaily, restMinutes float64,
 		MaxDailyMins:   maxDaily,
 		RestMinutes:    restMinutes,
 		TargetDuration: targetDuration,
+		MonitorTime:    monitorTime,
 		LastUpdated:    time.Now().Format("15:04:05"),
 	}
 }

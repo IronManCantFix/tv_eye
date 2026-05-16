@@ -1621,6 +1621,35 @@ async function loadTVMonitorStatus() {
         const container = document.getElementById('tvmonitor-status');
         container.innerHTML = '';
 
+        // 检查是否不在监控时间范围内
+        const now = new Date();
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        let outOfRange = false;
+        let monitorTimeDisplay = '';
+        if (statuses.length > 0) {
+            const mt = statuses[0].monitor_time || '08:00-23:00';
+            monitorTimeDisplay = mt;
+            const ranges = parseRecordTimeRanges(mt);
+            if (ranges.length > 0) {
+                const inRange = isFullDayRecordSchedule(ranges) || ranges.some(range => isMinuteInRecordRange(nowMinutes, range.start, range.end));
+                outOfRange = !inRange;
+            }
+        }
+
+        // 在状态列表顶部显示不在监控时间范围的提示
+        if (outOfRange) {
+            const banner = document.createElement('div');
+            banner.className = 'rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3 flex items-start gap-2';
+            banner.innerHTML = `
+                <svg class="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <div>
+                    <div class="text-xs font-bold text-amber-700">当前不在监控时间范围内</div>
+                    <div class="text-[10px] text-amber-600 mt-0.5">监控时段: ${monitorTimeDisplay}，监控功能暂时处于待机状态</div>
+                </div>
+            `;
+            container.appendChild(banner);
+        }
+
         statuses.forEach(s => {
             const stateColors = {
                 'OFF': 'bg-gray-100 text-gray-600 border-gray-200',

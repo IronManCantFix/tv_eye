@@ -40,7 +40,7 @@ func NewTVMonitor(cfg constant.TVMonitorConfig, rtspURL string) *TVMonitor {
 		rtspURL: rtspURL,
 		ha:      NewHAClient(cfg),
 	}
-	RegisterMonitor(cfg.CameraID, cfg.MaxSessionMinutes, cfg.MaxDailyMinutes, cfg.RestMinutes, cfg.TargetDuration)
+	RegisterMonitor(cfg.CameraID, cfg.MaxSessionMinutes, cfg.MaxDailyMinutes, cfg.RestMinutes, cfg.TargetDuration, cfg.MonitorTime)
 	return m
 }
 
