@@ -50,6 +50,12 @@ RUN go build \
       -ldflags="-s -w -X main.Version=${VERSION}" \
       -o camkeep main.go
 
+# ---------------------------------------------------------
+# 分析二进制运行时依赖的 OpenCV 动态库
+# ---------------------------------------------------------
+RUN ldd camkeep | grep opencv | awk '{print $1}' | sort > /tmp/opencv_deps.txt && \
+    cat /tmp/opencv_deps.txt
+
 
 # =========================================================
 # 2. Runtime（运行阶段）
@@ -67,19 +73,16 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
 
 # ---------------------------------------------------------
-# 只安装运行时依赖（与 builder 同源，确保 OpenCV 版本一致）
-# gocv v0.43.0 需要 OpenCV 4.10
+# 安装运行时依赖：根据 builder 阶段 ldd 结果安装所有 OpenCV 运行时库
 # ---------------------------------------------------------
+COPY --from=builder /tmp/opencv_deps.txt /tmp/opencv_deps.txt
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ffmpeg \
-      libopencv-core410 \
-      libopencv-imgproc410 \
-      libopencv-imgcodecs410 \
-      libopencv-videoio410 \
-      libopencv-highgui410 \
       ca-certificates \
       tzdata && \
+    apt-cache search '^libopencv-.*410$' | awk '{print $1}' | \
+      xargs apt-get install -y --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------
