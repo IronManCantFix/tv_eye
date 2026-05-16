@@ -54,7 +54,7 @@ RUN go build \
 # =========================================================
 # 2. Runtime（运行阶段）
 # =========================================================
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/debian:bookworm-slim AS runtime
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/debian:trixie-slim AS runtime
 
 ENV TZ=Asia/Shanghai \
     DEBIAN_FRONTEND=noninteractive
@@ -62,21 +62,17 @@ ENV TZ=Asia/Shanghai \
 WORKDIR /app
 
 # ---------------------------------------------------------
-# 国内 apt 源
-# ---------------------------------------------------------
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
-
-# ---------------------------------------------------------
-# 只安装运行时依赖
-# 注意：这里不是 -dev
+# 只安装运行时依赖（与 builder 同源，确保 OpenCV 版本一致）
+# gocv v0.43.0 需要 OpenCV 4.10
 # ---------------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ffmpeg \
-      libopencv-core406 \
-      libopencv-imgproc406 \
-      libopencv-imgcodecs406 \
-      libopencv-videoio406 \
+      libopencv-core410 \
+      libopencv-imgproc410 \
+      libopencv-imgcodecs410 \
+      libopencv-videoio410 \
+      libopencv-highgui410 \
       ca-certificates \
       tzdata && \
     rm -rf /var/lib/apt/lists/*
