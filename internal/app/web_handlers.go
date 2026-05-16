@@ -688,6 +688,7 @@ func handleTVMonitorIRTurnOff(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	ha.SendNotify("ir_turn_off", "TV哨兵执行了遥控关机")
 	c.JSON(http.StatusOK, gin.H{"msg": "红外关机指令已发送"})
 }
 
@@ -714,6 +715,7 @@ func handleTVMonitorPlayText(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	ha.SendNotify("play_text", "TV哨兵执行了语音播报: "+req.Message)
 	c.JSON(http.StatusOK, gin.H{"msg": "播放文本已发送"})
 }
 

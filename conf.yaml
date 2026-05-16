@@ -64,3 +64,7 @@ tv_monitors:
     # 留空 ha_tts_entity_id 则不播报
     ha_tts_entity_id: "media_player.xiao_ai"      # 小爱音箱实体 ID
     ha_tts_message: "看电视时间到了，休息一下吧"      # 播报文本 (留空则不播报)
+
+    # 动作三: 微信通知 (每次执行遥控/语音播报后发送)
+    # 留空则不发送通知
+    ha_notify_service: "hassbox_notify.hassbox_notify"  # 微信通知的 HA 服务

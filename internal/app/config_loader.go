@@ -66,6 +66,7 @@ func loadOrInitConfig() constant.Config {
 						HAControlEntityID:     "remote.tv_remote",
 						HATTSEntityID:         "media_player.xiao_ai",
 						HATTSMessage:          "看电视时间到了，休息一下吧",
+						HANotifyService:       "hassbox_notify.hassbox_notify",
 					},
 				},
 				}

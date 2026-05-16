@@ -79,6 +79,7 @@ type TVMonitorConfig struct {
 	HATTSMessage        string  `yaml:"ha_tts_message"`        // TTS 播报文本
 	HAIRTurnOffButtonID string  `yaml:"ha_ir_turn_off_button"` // 红外关机按钮实体 ID
 	HATTSService        string  `yaml:"ha_tts_service"`        // 音箱播放文本的 HA 服务 (如 notify.xiaomi_cn_xxx)
+	HANotifyService     string  `yaml:"ha_notify_service"`     // 微信通知的 HA 服务 (如 hassbox_notify.hassbox_notify)，留空则不发送通知
 	LogLevel            string  `yaml:"log_level"`             // 日志级别: "state"(默认,仅状态变化), "tick"(每次检测), "summary"(每5分钟摘要)
 }
 

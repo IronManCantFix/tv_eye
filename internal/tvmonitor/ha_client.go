@@ -56,6 +56,22 @@ func (c *HAClient) PlayText(prefix, message string) error {
 	return c.callService(svc, body)
 }
 
+// SendNotify 通过 HA 通知服务发送微信通知。如果未配置通知服务则跳过。
+func (c *HAClient) SendNotify(prefix, message string) {
+	if c.config.HANotifyService == "" {
+		return
+	}
+	body := map[string]interface{}{
+		"wechat":  true,
+		"message": message,
+	}
+	if err := c.callService(c.config.HANotifyService, body); err != nil {
+		log.Printf("[%s] 发送微信通知失败: %v", prefix, err)
+	} else {
+		log.Printf("[%s] 微信通知已发送: %s", prefix, message)
+	}
+}
+
 // TriggerShutdown 先通过音箱播放提示文本 (如有)，等待 5 秒，再通过红外按钮关机 (如有)。
 func (c *HAClient) TriggerShutdown(prefix, ttsMessage string) {
 	if c.config.HATTSService != "" && ttsMessage != "" {
@@ -63,6 +79,7 @@ func (c *HAClient) TriggerShutdown(prefix, ttsMessage string) {
 			log.Printf("[%s] 播放提示失败: %v", prefix, err)
 		} else {
 			log.Printf("[%s] 播放提示成功，等待 5 秒...", prefix)
+			c.SendNotify(prefix, "TV哨兵执行了语音播报: "+ttsMessage)
 			time.Sleep(5 * time.Second)
 		}
 	}
@@ -71,6 +88,7 @@ func (c *HAClient) TriggerShutdown(prefix, ttsMessage string) {
 			log.Printf("[%s] 红外关机失败: %v", prefix, err)
 		} else {
 			log.Printf("[%s] 红外关机成功", prefix)
+			c.SendNotify(prefix, "TV哨兵执行了遥控关机")
 		}
 	}
 }
