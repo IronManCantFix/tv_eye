@@ -139,6 +139,7 @@ func (m *TVMonitor) Run(ctx context.Context, wg *sync.WaitGroup) {
 			}
 
 			cap = newCap
+			cap.Set(gocv.VideoCaptureBufferSize, 1)
 			frame = newFrame
 			detector = NewDetector(m.config, frame.Cols(), frame.Rows())
 			m.detector = detector
@@ -269,16 +270,11 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 		return tickActionNone
 	}
 
-	// Drain buffered frames
-	fps := cap.Get(gocv.VideoCaptureFPS)
-	if fps < 1 {
-		fps = 25
-	}
-	staleFrames := int(fps * float64(m.config.CheckInterval))
-	if staleFrames > 1 {
-		cap.Grab(staleFrames - 1)
-	}
-	if !cap.Retrieve(frame) || frame.Empty() {
+	// Read the latest frame from the RTSP stream.
+	// BufferSize is set to 1 on connect, so Read() returns the most recent
+	// buffered frame. We still drain any remaining stale frames by reading
+	// multiple times and keeping only the last one.
+	if !cap.Read(frame) || frame.Empty() {
 		UpdateMonitorStatus(m.config.CameraID, m.sm.State(), false, m.sessionStart, m.dailyMinutes, m.restStart, m.dailyLocked, Metrics{})
 		m.mu.Unlock()
 		return tickActionReconnect
