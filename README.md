@@ -179,7 +179,7 @@ services:
 
 ## 致谢
 
-感谢 [IronManCantFix](https://github.com/IronManCantFix) 提供的 [CamKeep](https://github.com/IronManCantFix/camkeep) 原始项目，电视哨兵是在其基础上扩展开发的。
+感谢 [r0n9](https://github.com/r0n9) 提供的 [CamKeep](https://github.com/r0n9/camkeep) 原始项目，电视哨兵是在其基础上扩展开发的。
 
 ## 开源协议
 

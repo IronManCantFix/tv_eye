@@ -182,7 +182,7 @@ Access `http://<Your-NAS-IP>:9110` in your browser to enter the monitoring cente
 
 ## Acknowledgements
 
-Thanks to [IronManCantFix](https://github.com/IronManCantFix) for the original [CamKeep](https://github.com/IronManCantFix/camkeep) project. TV Sentinel is built on top of it.
+Thanks to [r0n9](https://github.com/r0n9) for the original [CamKeep](https://github.com/r0n9/camkeep) project. TV Sentinel is built on top of it.
 
 ## License
 
