@@ -71,6 +71,7 @@ type TVMonitorConfig struct {
 	MaxSessionMinutes   float64 `yaml:"max_session_minutes"`
 	RestMinutes         float64 `yaml:"rest_minutes"`
 	MaxDailyMinutes     float64 `yaml:"max_daily_minutes"`
+	ActionGraceSec      int     `yaml:"action_grace_sec"` // 红外/遥控触发后保护期(秒)，期间假定电视已关闭，防止 toggle 型遥控被重复按下重新开机
 	HAURL               string  `yaml:"ha_url"`
 	HAToken             string  `yaml:"ha_token"`
 	HAControlService    string  `yaml:"ha_control_service"`    // 控制遥控器的 HA 服务 (如 remote.turn_off)，留空则不控制
@@ -80,7 +81,26 @@ type TVMonitorConfig struct {
 	HAIRTurnOffButtonID string  `yaml:"ha_ir_turn_off_button"` // 红外关机按钮实体 ID
 	HATTSService        string  `yaml:"ha_tts_service"`        // 音箱播放文本的 HA 服务 (如 notify.xiaomi_cn_xxx)
 	HANotifyService     string  `yaml:"ha_notify_service"`     // 微信通知的 HA 服务 (如 hassbox_notify.hassbox_notify)，留空则不发送通知
+	// 三种动作的独立开关。指针类型 nil 视为启用 (向后兼容)，仅当显式设为 false 时关闭。
+	EnableTVShutdown    *bool `yaml:"enable_tv_shutdown,omitempty"`    // 是否执行 HA 关闭电视 (红外/遥控)
+	EnableVoiceNotify   *bool `yaml:"enable_voice_notify,omitempty"`   // 是否执行音箱语音播报
+	EnablePhoneNotify   *bool `yaml:"enable_phone_notify,omitempty"`   // 是否发送微信/手机推送通知
 	LogLevel            string  `yaml:"log_level"`             // 日志级别: "state"(默认,仅状态变化), "tick"(每次检测), "summary"(每5分钟摘要)
+}
+
+// IsTVShutdownEnabled 返回 EnableTVShutdown 的实际值，nil 视为 true。
+func (c *TVMonitorConfig) IsTVShutdownEnabled() bool {
+	return c.EnableTVShutdown == nil || *c.EnableTVShutdown
+}
+
+// IsVoiceNotifyEnabled 返回 EnableVoiceNotify 的实际值，nil 视为 true。
+func (c *TVMonitorConfig) IsVoiceNotifyEnabled() bool {
+	return c.EnableVoiceNotify == nil || *c.EnableVoiceNotify
+}
+
+// IsPhoneNotifyEnabled 返回 EnablePhoneNotify 的实际值，nil 视为 true。
+func (c *TVMonitorConfig) IsPhoneNotifyEnabled() bool {
+	return c.EnablePhoneNotify == nil || *c.EnablePhoneNotify
 }
 
 // Config 对应 yaml 配置文件

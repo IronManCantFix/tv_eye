@@ -12,8 +12,8 @@ import (
 	"gocv.io/x/gocv"
 )
 
-// haCooldown limits HA calls to at most once per this duration.
-const haCooldown = 30 * time.Second
+// haCooldown legacy throttle has been replaced by actionGraceUntil, which is
+// configurable via ActionGraceSec and serves as the single refire guard.
 
 type TVMonitor struct {
 	config       constant.TVMonitorConfig
@@ -31,7 +31,8 @@ type TVMonitor struct {
 	restViolationLogged  bool
 	mu                   sync.Mutex
 
-	lastHACall   time.Time
+	lastHACall       time.Time
+	actionGraceUntil time.Time // 期间假定电视已关闭，屏蔽检测结果与新的 HA 触发，避免 toggle 型遥控被重复按下
 }
 
 func NewTVMonitor(cfg constant.TVMonitorConfig, rtspURL string) *TVMonitor {
@@ -282,6 +283,13 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 
 	rawOn, metrics := detector.TVState(*frame)
 
+	// 触发关机动作后的保护期：检测结果一律视为"电视已关闭"，让状态机自然走出 TRIGGERED → RESTING，
+	// 也屏蔽 RESTING 期间因检测滞后/抖动造成的 rest_violation 反复触发。
+	inGrace := time.Now().Before(m.actionGraceUntil)
+	if inGrace {
+		rawOn = false
+	}
+
 	// On-demand snapshot: only generate when frontend requests it
 	if ConsumeSnapshotRequest(m.config.CameraID) {
 		if jpeg := detector.DrawROI(*frame); jpeg != nil {
@@ -338,12 +346,24 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 	case StateTriggered:
 		if shouldTrigger {
 			sessionMin := time.Since(m.sessionStart).Minutes()
+			var reason string
 			if prevState == StatePending {
-				AddLog(m.config.CameraID, "session_exceeded", fmt.Sprintf("单次观看 %.0f 分钟超限，关闭电视", sessionMin))
+				reason = fmt.Sprintf("单次观看 %.0f 分钟超限，触发自动关机", sessionMin)
+				AddLog(m.config.CameraID, "session_exceeded", reason)
 			} else {
-				AddLog(m.config.CameraID, "re_trigger", fmt.Sprintf("电视仍未关闭（已 %.0f 分钟），再次尝试关机", sessionMin))
+				reason = fmt.Sprintf("电视仍未关闭（已 %.0f 分钟），再次尝试关机", sessionMin)
+				AddLog(m.config.CameraID, "re_trigger", reason)
 			}
-			haAction = m.makeHAAction("")
+			haAction = m.makeHAAction("", reason)
+			// 命中并即将发 IR：直接强制转入 RESTING，进入 grace 保护期。
+			// 这样 toggle 型遥控不会因检测滞后而被再按一次（变成开机）。
+			if haAction != nil {
+				m.sm.ForceResting()
+				m.restStart = time.Now()
+				m.sm.SetRestStartSet(true)
+				AddLog(m.config.CameraID, "grace_start",
+					fmt.Sprintf("进入 %ds 保护期，期间忽略检测结果", m.config.ActionGraceSec))
+			}
 		}
 
 	case StateResting:
@@ -359,7 +379,7 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 			AddLog(m.config.CameraID, "rest_complete", "休息时间结束，可继续观看")
 		} else if rawOn {
 			// Rest violation: bypass cooldown to ensure TV is turned off immediately
-			haAction = m.forceShutdown("休息时间还没到哦，再等一下")
+			haAction = m.forceShutdown("休息时间还没到哦，再等一下", "休息期间电视被打开，正在关闭")
 			if !m.restViolationLogged {
 				AddLog(m.config.CameraID, "rest_violation", "休息期间电视被打开，持续关闭中")
 				m.restViolationLogged = true
@@ -377,8 +397,9 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 			m.sm.ForceResting()
 			m.restStart = time.Now()
 			m.sm.SetRestStartSet(true)
-			haAction = m.forceShutdown("")
-			AddLog(m.config.CameraID, "daily_exceeded", fmt.Sprintf("今日观看 %.1f 分钟超限，锁定至次日零点", m.dailyMinutes))
+			reason := fmt.Sprintf("今日观看 %.1f 分钟超限，锁定至次日零点", m.dailyMinutes)
+			haAction = m.forceShutdown("", reason)
+			AddLog(m.config.CameraID, "daily_exceeded", reason)
 		}
 	}
 
@@ -394,32 +415,51 @@ func (m *TVMonitor) tick(cap *gocv.VideoCapture, frame *gocv.Mat, detector *Dete
 	return tickActionNone
 }
 
-// makeHAAction returns an HA action closure, or nil if still within cooldown.
-func (m *TVMonitor) makeHAAction(ttsOverride string) func() {
-	if time.Since(m.lastHACall) < haCooldown {
-		return nil
+// graceDuration 返回当前配置的动作保护期时长。
+func (m *TVMonitor) graceDuration() time.Duration {
+	sec := m.config.ActionGraceSec
+	if sec <= 0 {
+		sec = 10
 	}
-	m.lastHACall = time.Now()
-	prefix := m.prefix()
-	msg := m.config.HATTSMessage
-	ha := m.ha
-	if ttsOverride != "" {
-		return func() { ha.TriggerShutdown(prefix, ttsOverride) }
-	}
-	return func() { ha.TriggerShutdown(prefix, msg) }
+	return time.Duration(sec) * time.Second
 }
 
-// forceShutdown creates an HA action that bypasses the normal cooldown.
-// Used for rest violations where the TV must be turned off immediately.
-func (m *TVMonitor) forceShutdown(ttsOverride string) func() {
-	m.lastHACall = time.Now()
+// makeHAAction returns an HA action closure, or nil if still within the
+// post-action grace window — actionGraceUntil is the single source of truth
+// for "do not refire" timing, fully driven by the configurable ActionGraceSec.
+func (m *TVMonitor) makeHAAction(ttsOverride, notifyReason string) func() {
+	now := time.Now()
+	if now.Before(m.actionGraceUntil) {
+		return nil
+	}
+	m.lastHACall = now
+	m.actionGraceUntil = now.Add(m.graceDuration())
 	prefix := m.prefix()
 	msg := m.config.HATTSMessage
-	ha := m.ha
 	if ttsOverride != "" {
-		return func() { ha.TriggerShutdown(prefix, ttsOverride) }
+		msg = ttsOverride
 	}
-	return func() { ha.TriggerShutdown(prefix, msg) }
+	ha := m.ha
+	return func() { ha.TriggerShutdown(prefix, msg, notifyReason) }
+}
+
+// forceShutdown creates an HA action that bypasses normal throttling but still
+// respects the post-action grace period — once IR has fired we trust it worked
+// for graceDuration, regardless of detection oscillation.
+func (m *TVMonitor) forceShutdown(ttsOverride, notifyReason string) func() {
+	now := time.Now()
+	if now.Before(m.actionGraceUntil) {
+		return nil
+	}
+	m.lastHACall = now
+	m.actionGraceUntil = now.Add(m.graceDuration())
+	prefix := m.prefix()
+	msg := m.config.HATTSMessage
+	if ttsOverride != "" {
+		msg = ttsOverride
+	}
+	ha := m.ha
+	return func() { ha.TriggerShutdown(prefix, msg, notifyReason) }
 }
 
 func (m *TVMonitor) prefix() string {

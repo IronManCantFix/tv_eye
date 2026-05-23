@@ -38,6 +38,8 @@ func startWebServer() {
 	r.POST("/api/tvmonitor/ir_turn_off", handleTVMonitorIRTurnOff)
 	r.POST("/api/tvmonitor/play_text", handleTVMonitorPlayText)
 	r.POST("/api/tvmonitor/toggle", handleTVMonitorToggle)
+	r.POST("/api/tvmonitor/action_toggle/:action", handleTVMonitorActionToggle)
+	r.POST("/api/tvmonitor/update_limits", handleTVMonitorUpdateLimits)
 	r.GET("/api/tvmonitor/snapshot/:id", handleTVMonitorSnapshot)
 
 	r.StaticFS("/play", http.Dir(constant.DefaultRecordBaseDir))

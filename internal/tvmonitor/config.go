@@ -43,6 +43,9 @@ func ApplyDefaults(cfg *constant.TVMonitorConfig) {
 	if cfg.MaxDailyMinutes == 0 {
 		cfg.MaxDailyMinutes = 60
 	}
+	if cfg.ActionGraceSec == 0 {
+		cfg.ActionGraceSec = 10
+	}
 	if cfg.MonitorTime == "" {
 		cfg.MonitorTime = "08:00-23:00"
 	}

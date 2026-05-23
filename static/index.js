@@ -1891,6 +1891,81 @@ async function playTTS() {
     }
 }
 
+async function toggleTVAction(action, el) {
+    const idMap = {
+        tv_shutdown: 'actionTVShutdown',
+        voice_notify: 'actionVoiceNotify',
+        phone_notify: 'actionPhoneNotify',
+    };
+    const nameMap = {
+        tv_shutdown: '关闭电视',
+        voice_notify: '语音通知',
+        phone_notify: '手机提醒',
+    };
+    const prev = !el.checked;
+    el.disabled = true;
+    try {
+        const resp = await fetch(`/api/tvmonitor/action_toggle/${action}`, {method: 'POST'});
+        const data = await resp.json();
+        if (!resp.ok) {
+            el.checked = prev;
+            alert(`切换 ${nameMap[action]} 失败: ${data.error || resp.status}`);
+        } else {
+            el.checked = !!data.enabled;
+        }
+    } catch (e) {
+        el.checked = prev;
+        alert('请求失败: ' + e.message);
+    }
+    el.disabled = false;
+}
+
+async function saveTVLimits() {
+    const session = parseFloat(document.getElementById('limitMaxSession').value);
+    const daily = parseFloat(document.getElementById('limitMaxDaily').value);
+    const rest = parseFloat(document.getElementById('limitRest').value);
+    const grace = parseInt(document.getElementById('limitGraceSec').value, 10);
+    if (!session || !daily || !rest || session <= 0 || daily <= 0 || rest <= 0) {
+        alert('三项时长必须为正数');
+        return;
+    }
+    if (!grace || grace < 10 || grace > 600) {
+        alert('动作保护期必须在 10~600 秒之间');
+        return;
+    }
+    const btn = document.getElementById('saveLimitsBtn');
+    const hint = document.getElementById('limitsSaveHint');
+    const origin = btn.innerText;
+    btn.disabled = true;
+    btn.innerText = '保存中...';
+    try {
+        const resp = await fetch('/api/tvmonitor/update_limits', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                max_session_minutes: session,
+                max_daily_minutes: daily,
+                rest_minutes: rest,
+                action_grace_sec: grace,
+            }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            hint.classList.remove('hidden');
+            hint.classList.remove('text-red-500');
+            hint.classList.add('text-green-600');
+            hint.innerText = '已保存';
+            setTimeout(() => hint.classList.add('hidden'), 2500);
+        } else {
+            alert('保存失败: ' + (data.error || resp.status));
+        }
+    } catch (e) {
+        alert('请求失败: ' + e.message);
+    }
+    btn.disabled = false;
+    btn.innerText = origin;
+}
+
 // 初始化 TV 监控轮询
 function initTVMonitorPolling() {
     loadTVMonitorStatus();

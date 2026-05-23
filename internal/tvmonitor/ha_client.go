@@ -56,8 +56,11 @@ func (c *HAClient) PlayText(prefix, message string) error {
 	return c.callService(svc, body)
 }
 
-// SendNotify 通过 HA 通知服务发送微信通知。如果未配置通知服务则跳过。
+// SendNotify 通过 HA 通知服务发送微信通知。如果未配置通知服务或开关已关闭则跳过。
 func (c *HAClient) SendNotify(prefix, message string) {
+	if !c.config.IsPhoneNotifyEnabled() {
+		return
+	}
 	if c.config.HANotifyService == "" {
 		return
 	}
@@ -72,24 +75,30 @@ func (c *HAClient) SendNotify(prefix, message string) {
 	}
 }
 
-// TriggerShutdown 先通过音箱播放提示文本 (如有)，等待 5 秒，再通过红外按钮关机 (如有)。
-func (c *HAClient) TriggerShutdown(prefix, ttsMessage string) {
-	if c.config.HATTSService != "" && ttsMessage != "" {
+// TriggerShutdown 触发三种动作，彼此完全独立：
+//   - 语音播报 (EnableVoiceNotify)
+//   - 关闭电视 (EnableTVShutdown)
+//   - 手机/微信提醒 (EnablePhoneNotify)，使用 notifyReason 作为通知内容
+//
+// 任一动作执行失败/跳过都不会影响另外两个。
+func (c *HAClient) TriggerShutdown(prefix, ttsMessage, notifyReason string) {
+	if c.config.IsVoiceNotifyEnabled() && c.config.HATTSService != "" && ttsMessage != "" {
 		if err := c.PlayText(prefix, ttsMessage); err != nil {
 			log.Printf("[%s] 播放提示失败: %v", prefix, err)
 		} else {
-			log.Printf("[%s] 播放提示成功，等待 5 秒...", prefix)
-			c.SendNotify(prefix, "TV哨兵执行了语音播报: "+ttsMessage)
+			log.Printf("[%s] 播放提示成功", prefix)
 			time.Sleep(5 * time.Second)
 		}
 	}
-	if c.config.HAIRTurnOffButtonID != "" {
+	if c.config.IsTVShutdownEnabled() && c.config.HAIRTurnOffButtonID != "" {
 		if err := c.PressIRButton(prefix); err != nil {
 			log.Printf("[%s] 红外关机失败: %v", prefix, err)
 		} else {
 			log.Printf("[%s] 红外关机成功", prefix)
-			c.SendNotify(prefix, "TV哨兵执行了遥控关机")
 		}
+	}
+	if notifyReason != "" {
+		c.SendNotify(prefix, notifyReason)
 	}
 }
 

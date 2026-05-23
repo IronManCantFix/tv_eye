@@ -62,19 +62,49 @@ func handleIndex(c *gin.Context) {
 	constant.ConfigMux.RLock()
 	tvMonitorEnabled := false
 	var defaultTTSMessage string
+	tvShutdownEnabled := true
+	voiceNotifyEnabled := true
+	phoneNotifyEnabled := true
+	var maxSessionMinutes, maxDailyMinutes, restMinutes float64
+	var actionGraceSec int
 	for _, tm := range currentConfig.TVMonitors {
 		if tm.Enabled {
 			tvMonitorEnabled = true
 			defaultTTSMessage = tm.HATTSMessage
+			tvShutdownEnabled = tm.IsTVShutdownEnabled()
+			voiceNotifyEnabled = tm.IsVoiceNotifyEnabled()
+			phoneNotifyEnabled = tm.IsPhoneNotifyEnabled()
+			maxSessionMinutes = tm.MaxSessionMinutes
+			maxDailyMinutes = tm.MaxDailyMinutes
+			restMinutes = tm.RestMinutes
+			actionGraceSec = tm.ActionGraceSec
 			break
 		}
+	}
+	// 若没有启用的监控，从第一个监控配置读取值供 UI 预填充
+	if !tvMonitorEnabled && len(currentConfig.TVMonitors) > 0 {
+		tm := currentConfig.TVMonitors[0]
+		maxSessionMinutes = tm.MaxSessionMinutes
+		maxDailyMinutes = tm.MaxDailyMinutes
+		restMinutes = tm.RestMinutes
+		actionGraceSec = tm.ActionGraceSec
+	}
+	if actionGraceSec == 0 {
+		actionGraceSec = 10
 	}
 	constant.ConfigMux.RUnlock()
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"Version":           version,
-		"TVMonitorEnabled":  tvMonitorEnabled,
-		"DefaultTTSMessage": defaultTTSMessage,
+		"Version":             version,
+		"TVMonitorEnabled":    tvMonitorEnabled,
+		"DefaultTTSMessage":   defaultTTSMessage,
+		"TVShutdownEnabled":   tvShutdownEnabled,
+		"VoiceNotifyEnabled":  voiceNotifyEnabled,
+		"PhoneNotifyEnabled":  phoneNotifyEnabled,
+		"MaxSessionMinutes":   maxSessionMinutes,
+		"MaxDailyMinutes":     maxDailyMinutes,
+		"RestMinutes":         restMinutes,
+		"ActionGraceSec":      actionGraceSec,
 	})
 }
 
@@ -688,7 +718,6 @@ func handleTVMonitorIRTurnOff(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	ha.SendNotify("ir_turn_off", "TV哨兵执行了遥控关机")
 	c.JSON(http.StatusOK, gin.H{"msg": "红外关机指令已发送"})
 }
 
@@ -715,7 +744,6 @@ func handleTVMonitorPlayText(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	ha.SendNotify("play_text", "TV哨兵执行了语音播报: "+req.Message)
 	c.JSON(http.StatusOK, gin.H{"msg": "播放文本已发送"})
 }
 
@@ -767,6 +795,171 @@ func handleTVMonitorToggle(c *gin.Context) {
 
 	go restartTasks(newConfig)
 	c.JSON(200, gin.H{"enabled": newEnabled})
+}
+
+// handleTVMonitorActionToggle 切换电视监控触发的三个动作开关之一:
+// action: "tv_shutdown" / "voice_notify" / "phone_notify"
+func handleTVMonitorActionToggle(c *gin.Context) {
+	action := c.Param("action")
+	if action != "tv_shutdown" && action != "voice_notify" && action != "phone_notify" {
+		c.JSON(400, gin.H{"error": "未知动作: " + action})
+		return
+	}
+
+	data, err := os.ReadFile(constant.ConfigFilePath)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "读取配置失败"})
+		return
+	}
+
+	newConfig, err := parseConfigYAML(data)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "解析配置失败: " + err.Error()})
+		return
+	}
+
+	if len(newConfig.TVMonitors) == 0 {
+		c.JSON(400, gin.H{"error": "未配置 tv_monitors"})
+		return
+	}
+
+	tm := &newConfig.TVMonitors[0]
+	var newEnabled bool
+	switch action {
+	case "tv_shutdown":
+		newEnabled = !tm.IsTVShutdownEnabled()
+		tm.EnableTVShutdown = &newEnabled
+	case "voice_notify":
+		newEnabled = !tm.IsVoiceNotifyEnabled()
+		tm.EnableVoiceNotify = &newEnabled
+	case "phone_notify":
+		newEnabled = !tm.IsPhoneNotifyEnabled()
+		tm.EnablePhoneNotify = &newEnabled
+	}
+
+	out, err := yaml.Marshal(newConfig)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "序列化配置失败"})
+		return
+	}
+
+	header := ""
+	content := string(data)
+	if idx := strings.Index(content, "---\n"); idx >= 0 {
+		header = content[:idx+4]
+	} else if strings.HasPrefix(content, "#") {
+		if nlIdx := strings.Index(content, "\n"); nlIdx >= 0 {
+			header = content[:nlIdx+1] + "\n"
+		}
+	}
+
+	finalOut := []byte(header + string(out))
+	if err := os.WriteFile(constant.ConfigFilePath, finalOut, 0644); err != nil {
+		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	go restartTasks(newConfig)
+	c.JSON(200, gin.H{"action": action, "enabled": newEnabled})
+}
+
+// handleTVMonitorUpdateLimits 更新单次时长、每日总时长、休息冷却、动作保护期四个参数。
+func handleTVMonitorUpdateLimits(c *gin.Context) {
+	var req struct {
+		MaxSessionMinutes *float64 `json:"max_session_minutes"`
+		MaxDailyMinutes   *float64 `json:"max_daily_minutes"`
+		RestMinutes       *float64 `json:"rest_minutes"`
+		ActionGraceSec    *int     `json:"action_grace_sec"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "请求格式错误"})
+		return
+	}
+
+	check := func(name string, v *float64) error {
+		if v == nil {
+			return nil
+		}
+		if *v <= 0 || *v > 1440 {
+			return fmt.Errorf("%s 必须在 (0, 1440] 区间内", name)
+		}
+		return nil
+	}
+	for _, e := range []error{
+		check("max_session_minutes", req.MaxSessionMinutes),
+		check("max_daily_minutes", req.MaxDailyMinutes),
+		check("rest_minutes", req.RestMinutes),
+	} {
+		if e != nil {
+			c.JSON(400, gin.H{"error": e.Error()})
+			return
+		}
+	}
+	if req.ActionGraceSec != nil && (*req.ActionGraceSec < 10 || *req.ActionGraceSec > 600) {
+		c.JSON(400, gin.H{"error": "action_grace_sec 必须在 [10, 600] 区间内"})
+		return
+	}
+
+	data, err := os.ReadFile(constant.ConfigFilePath)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "读取配置失败"})
+		return
+	}
+
+	newConfig, err := parseConfigYAML(data)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "解析配置失败: " + err.Error()})
+		return
+	}
+
+	if len(newConfig.TVMonitors) == 0 {
+		c.JSON(400, gin.H{"error": "未配置 tv_monitors"})
+		return
+	}
+
+	tm := &newConfig.TVMonitors[0]
+	if req.MaxSessionMinutes != nil {
+		tm.MaxSessionMinutes = *req.MaxSessionMinutes
+	}
+	if req.MaxDailyMinutes != nil {
+		tm.MaxDailyMinutes = *req.MaxDailyMinutes
+	}
+	if req.RestMinutes != nil {
+		tm.RestMinutes = *req.RestMinutes
+	}
+	if req.ActionGraceSec != nil {
+		tm.ActionGraceSec = *req.ActionGraceSec
+	}
+
+	out, err := yaml.Marshal(newConfig)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "序列化配置失败"})
+		return
+	}
+
+	header := ""
+	content := string(data)
+	if idx := strings.Index(content, "---\n"); idx >= 0 {
+		header = content[:idx+4]
+	} else if strings.HasPrefix(content, "#") {
+		if nlIdx := strings.Index(content, "\n"); nlIdx >= 0 {
+			header = content[:nlIdx+1] + "\n"
+		}
+	}
+
+	finalOut := []byte(header + string(out))
+	if err := os.WriteFile(constant.ConfigFilePath, finalOut, 0644); err != nil {
+		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
+		return
+	}
+
+	go restartTasks(newConfig)
+	c.JSON(200, gin.H{
+		"max_session_minutes": tm.MaxSessionMinutes,
+		"max_daily_minutes":   tm.MaxDailyMinutes,
+		"rest_minutes":        tm.RestMinutes,
+		"action_grace_sec":    tm.ActionGraceSec,
+	})
 }
 
 func getFirstEnabledTVMonitor() *constant.TVMonitorConfig {

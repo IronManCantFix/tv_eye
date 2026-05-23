@@ -51,9 +51,14 @@ tv_monitors:
     max_daily_minutes: 60              # 每日总观看时长上限 (分钟)，用完后锁定到次日零点重置
 
     # --- Home Assistant 联动 ---
-    # 两个动作相互独立，按需配置，留空则不执行对应动作
+    # 三个动作彼此独立，可在 Web 界面或下方独立开关，留空对应字段也可关闭
     ha_url: "http://homeassistant.local:8123"  # HA 的访问地址
     ha_token: ""                       # HA 的 Long-Lived Access Token (在 HA 用户设置中生成)
+
+    # 动作开关 (省略则默认 true，可在 Web 界面随时切换)
+    enable_tv_shutdown: true           # 是否触发 HA 关闭电视 (红外/遥控)
+    enable_voice_notify: true          # 是否触发音箱语音播报
+    enable_phone_notify: true          # 是否发送微信/手机提醒
 
     # 动作一: 遥控器控制 (关闭电视)
     # 留空 ha_control_service 或 ha_control_entity_id 则不执行控制
