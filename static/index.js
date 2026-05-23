@@ -31,6 +31,21 @@ window.onload = function () {
     });
 };
 
+// --- Toast 通知 ---
+function showToast(message, type) {
+    type = type || 'success';
+    var container = document.getElementById('toastContainer');
+    if (!container) return;
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(function() {
+        el.classList.add('toast-out');
+        setTimeout(function() { el.remove(); }, 300);
+    }, 2500);
+}
+
 // --- 控制面板动作弹窗 ---
 function confirmCamAction(camId, action) {
     pendingAction = {camId, action};
@@ -1934,7 +1949,6 @@ async function saveTVLimits() {
         return;
     }
     const btn = document.getElementById('saveLimitsBtn');
-    const hint = document.getElementById('limitsSaveHint');
     const origin = btn.innerText;
     btn.disabled = true;
     btn.innerText = '保存中...';
@@ -1951,16 +1965,12 @@ async function saveTVLimits() {
         });
         const data = await resp.json();
         if (resp.ok) {
-            hint.classList.remove('hidden');
-            hint.classList.remove('text-red-500');
-            hint.classList.add('text-green-600');
-            hint.innerText = '已保存';
-            setTimeout(() => hint.classList.add('hidden'), 2500);
+            showToast('时长设置已保存');
         } else {
-            alert('保存失败: ' + (data.error || resp.status));
+            showToast('保存失败: ' + (data.error || resp.status), 'error');
         }
     } catch (e) {
-        alert('请求失败: ' + e.message);
+        showToast('请求失败: ' + e.message, 'error');
     }
     btn.disabled = false;
     btn.innerText = origin;

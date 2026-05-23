@@ -1,8 +1,8 @@
 # CamKeep 配置文件
 
 daily_merge:
-  enabled: false
-  time: "03:30"
+    enabled: false
+    time: "03:30"
 cameras:
     - id: 江南城
       rtsp_url: xiaomi://30068335:@192.168.5.138?did=1078410371&model=chuangmi.camera.061a01&subtype=2#video=copy#audio=pcmu
@@ -46,6 +46,7 @@ tv_monitors:
       max_session_minutes: 3
       rest_minutes: 20
       max_daily_minutes: 60
+      action_grace_sec: 60
       ha_url: http://192.168.5.100:8123
       ha_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI1ZWY1Nzc0ZDA3NTY0YWQyYjgxM2M5NjBjNjE2NjM3ZiIsImlhdCI6MTc3ODYzNDQ3NCwiZXhwIjoyMDkzOTk0NDc0fQ.Z6Ky9vVQe46AzKVQaiASdA6Ir_quQqIBTrAfZais-HI
       ha_control_service: remote.turn_off
@@ -54,5 +55,6 @@ tv_monitors:
       ha_tts_message: 看电视时间到了，休息一下吧
       ha_ir_turn_off_button: button.miir_cn_ir_1936366888175165441_ir01_turn_on_a_2_5
       ha_tts_service: notify.xiaomi_cn_866304674_oh2p_play_text_a_7_3
-      ha_notify_service: "hassbox_notify.hassbox_notify"  # 微信通知的 HA 服务
+      ha_notify_service: hassbox_notify.hassbox_notify
+      enable_tv_shutdown: false
       log_level: tick
